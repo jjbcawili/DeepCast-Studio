@@ -1,0 +1,6 @@
+{
+  "name": "AudioOverview",
+  "description": "Deep dive audio podcast overview generator with customizable length up to 60 minutes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
