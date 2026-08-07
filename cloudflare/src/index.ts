@@ -6,6 +6,7 @@ type Env = {
   GROQ_API_KEY?: string; GROQ_MODEL?: string; KOKORO_SPACE_URL?: string;
   TTS_SHARED_SECRET?: string; HF_TOKEN?: string; MAX_DAILY_EPISODES?: string;
   GITHUB_ACTIONS_TOKEN?: string; GITHUB_REPO?: string; GITHUB_AUDIO_WORKFLOW?: string; GITHUB_AUDIO_REF?: string;
+  SITE_SHARED_SECRET?: string;
 };
 type QueueJob = { kind:'plan'|'script_segment'|'audio_segment'|'mix_episode'; episodeId:string; segmentIndex?:number };
 
@@ -29,6 +30,14 @@ async function firebaseUser(req:Request,env:Env){
   if(!payload.sub)throw new Error('INVALID_TOKEN_SUBJECT');
   return {uid:String(payload.sub),email:payload.email?String(payload.email):undefined,name:payload.name?String(payload.name):undefined};
 }
+async function requestUser(req:Request,env:Env){
+  const auth=req.headers.get('authorization')||'';
+  if(env.SITE_SHARED_SECRET && auth===`Bearer ${env.SITE_SHARED_SECRET}`){
+    const owner=(req.headers.get('x-deepcast-owner')||'personal-workspace').trim().slice(0,160);
+    return {uid:`site:${owner}`};
+  }
+  return firebaseUser(req,env);
+}
 async function event(env:Env,episodeId:string,status:string,message:string){await env.DB.prepare('INSERT INTO episode_events(episode_id,status,message,created_at) VALUES(?,?,?,?)').bind(episodeId,status,message,now()).run();}
 async function setEpisode(env:Env,episodeId:string,status:string,progress:number,message:string,extra:{error?:string|null;failedStage?:string|null;retryable?:number;script?:string;engine?:string}={}){
   await env.DB.prepare(`UPDATE episodes SET status=?,progress=?,progress_message=?,error=?,failed_stage=?,retryable=?,script=COALESCE(?,script),engine=COALESCE(?,engine),updated_at=? WHERE id=?`).bind(status,progress,message,extra.error??null,extra.failedStage??null,extra.retryable??1,extra.script??null,extra.engine??null,now(),episodeId).run();
@@ -40,7 +49,7 @@ async function episodeJson(env:Env,row:any){
   const assets=(await env.DB.prepare('SELECT kind,label,access_token FROM episode_assets WHERE episode_id=? ORDER BY created_at ASC').bind(row.id).all()).results||[];
   return {id:row.id,remoteId:row.id,title:row.title,prompt:row.prompt,projectId:row.project_id||undefined,format:row.format,runtime:row.runtime,script:row.script||undefined,createdAt:row.created_at,updatedAt:row.updated_at,engine:row.engine||undefined,status:row.status,progress:row.progress,progressMessage:row.progress_message,error:row.error||undefined,retryable:!!row.retryable,events:events.map((e:any)=>({at:e.created_at,status:e.status,message:e.message})),assets:assets.map((a:any)=>({kind:a.kind,label:a.label||undefined,url:`${env.PUBLIC_BASE_URL}/public/assets/${a.access_token}`}))};
 }
-async function assertOwner(req:Request,env:Env,episodeId:string){const u=await firebaseUser(req,env);const row=await getEpisodeRow(env,episodeId);if(!row)throw new Error('NOT_FOUND');if(row.user_id!==u.uid)throw new Error('FORBIDDEN');return {u,row};}
+async function assertOwner(req:Request,env:Env,episodeId:string){const u=await requestUser(req,env);const row=await getEpisodeRow(env,episodeId);if(!row)throw new Error('NOT_FOUND');if(row.user_id!==u.uid)throw new Error('FORBIDDEN');return {u,row};}
 
 async function generateText(env:Env,prompt:string){
   try{
@@ -145,7 +154,7 @@ async function handle(req:Request,env:Env){
   try{
     if(url.pathname==='/api/health')return reply({ok:true,architecture:'durable episode shell + queue + D1/R2',audioRunner:env.GITHUB_ACTIONS_TOKEN&&env.GITHUB_REPO?'github-actions':env.KOKORO_SPACE_URL?'hosted-gradio':'unconfigured'},200,cors);
     if(url.pathname==='/api/episodes'&&req.method==='POST'){
-      const u=await firebaseUser(req,env); const since=new Date(Date.now()-86400000).toISOString();const count:any=await env.DB.prepare('SELECT COUNT(*) n FROM episodes WHERE user_id=? AND created_at>=?').bind(u.uid,since).first();const cap=Math.max(1,Number(env.MAX_DAILY_EPISODES||3));if(Number(count?.n||0)>=cap)return reply({error:`Daily safety cap reached (${cap} episodes). This prevents runaway free-tier usage.`},429,cors);
+      const u=await requestUser(req,env); const since=new Date(Date.now()-86400000).toISOString();const count:any=await env.DB.prepare('SELECT COUNT(*) n FROM episodes WHERE user_id=? AND created_at>=?').bind(u.uid,since).first();const cap=Math.max(1,Number(env.MAX_DAILY_EPISODES||3));if(Number(count?.n||0)>=cap)return reply({error:`Daily safety cap reached (${cap} episodes). This prevents runaway free-tier usage.`},429,cors);
       const b:any=await req.json();if(!String(b.prompt||'').trim()&&!String(b.scriptGuidance||'').trim())return reply({error:'Prompt or script guidance is required.'},400,cors);const episodeId=id('ep');const created=now();await env.DB.prepare(`INSERT INTO episodes(id,user_id,local_episode_id,title,prompt,project_id,format,runtime,request_json,status,progress,progress_message,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(episodeId,u.uid,b.localEpisodeId||null,b.episodeTitle||'Untitled Deep Dive',b.prompt||b.scriptGuidance,b.projectId||null,b.format||'Deep Dive',b.runtime||'45',JSON.stringify(b),'QUEUED',5,'Episode accepted. Waiting for the background script queue.',created,created).run();await event(env,episodeId,'QUEUED','Episode accepted by the background queue.');await env.EPISODE_QUEUE.send({kind:'plan',episodeId});return reply({episode:await episodeJson(env,await getEpisodeRow(env,episodeId))},202,cors);
     }
     const m=url.pathname.match(/^\/api\/episodes\/([^/]+)$/);if(m&&req.method==='GET'){const {row}=await assertOwner(req,env,m[1]);return reply({episode:await episodeJson(env,row)},200,cors);}
@@ -215,8 +224,8 @@ async function handle(req:Request,env:Env){
       return reply({ok:true,key},200,cors);
     }
     if(url.pathname==='/internal/audio-object'&&req.method==='GET'){if(!env.TTS_SHARED_SECRET||req.headers.get('authorization')!==`Bearer ${env.TTS_SHARED_SECRET}`)return new Response('Forbidden',{status:403});const key=url.searchParams.get('key');if(!key)return new Response('Missing key',{status:400});const obj=await env.AUDIO.get(key);return obj?new Response(obj.body,{headers:{'Content-Type':'audio/mpeg'}}):new Response('Not found',{status:404});}
-    if(url.pathname==='/api/preview-voice'&&req.method==='POST'){await firebaseUser(req,env);const b:any=await req.json();if(!env.KOKORO_SPACE_URL)return reply({error:'Hosted Kokoro worker is not configured.'},503,cors);const raw:any=await gradioCall(env,'preview',{sharedSecret:env.TTS_SHARED_SECRET,voice:b.voice||'af_heart',pace:b.pace||'Medium',text:`${b.hostName||'Host'}: Welcome to DeepCast Studio. Let’s build something worth listening to.`});let value:any=Array.isArray(raw)?raw[0]:raw;if(typeof value==='string'){try{value=JSON.parse(value)}catch{}}return reply(value||{error:'Preview worker returned no audio.'},value?.audio?200:502,cors);}
-    if(url.pathname==='/api/chat'&&req.method==='POST'){await firebaseUser(req,env);const b:any=await req.json();let text='';if(b.webSearch&&env.GROQ_API_KEY){try{text=await researchWeb(env,`Answer this DeepCast Studio chat question using current web results when useful. Include source names and URLs: ${String(b.message||'').slice(0,12000)}`);}catch{}}if(!text)text=await generateText(env,`Act as DeepCast Studio Chat. User: ${String(b.message||'').slice(0,12000)}`);return reply({text},200,cors);}
+    if(url.pathname==='/api/preview-voice'&&req.method==='POST'){await requestUser(req,env);const b:any=await req.json();if(!env.KOKORO_SPACE_URL)return reply({error:'Hosted Kokoro worker is not configured.'},503,cors);const raw:any=await gradioCall(env,'preview',{sharedSecret:env.TTS_SHARED_SECRET,voice:b.voice||'af_heart',pace:b.pace||'Medium',text:`${b.hostName||'Host'}: Welcome to DeepCast Studio. Let’s build something worth listening to.`});let value:any=Array.isArray(raw)?raw[0]:raw;if(typeof value==='string'){try{value=JSON.parse(value)}catch{}}return reply(value||{error:'Preview worker returned no audio.'},value?.audio?200:502,cors);}
+    if(url.pathname==='/api/chat'&&req.method==='POST'){await requestUser(req,env);const b:any=await req.json();let text='';if(b.webSearch&&env.GROQ_API_KEY){try{text=await researchWeb(env,`Answer this DeepCast Studio chat question using current web results when useful. Include source names and URLs: ${String(b.message||'').slice(0,12000)}`);}catch{}}if(!text)text=await generateText(env,`Act as DeepCast Studio Chat. User: ${String(b.message||'').slice(0,12000)}`);return reply({text},200,cors);}
     return reply({error:'Not found'},404,cors);
   }catch(e:any){const msg=e?.message||'Request failed';const status=msg==='AUTH_REQUIRED'?401:msg==='FORBIDDEN'?403:msg==='NOT_FOUND'?404:400;return reply({error:msg},status,cors);}
 }

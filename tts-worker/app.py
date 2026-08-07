@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import requests
 import soundfile as sf
-from gradio import Server
+import gradio as gr
 from kokoro import KPipeline
 
 SAMPLE_RATE = 24000
@@ -103,10 +103,6 @@ def upload(path: Path, callback_url: str):
     r.raise_for_status()
 
 
-app = Server()
-
-
-@app.api(name="synthesize", concurrency_limit=1)
 def synthesize(payload_json: str) -> str:
     payload = json.loads(payload_json)
     require_secret(payload)
@@ -137,7 +133,6 @@ def synthesize(payload_json: str) -> str:
     return json.dumps({"ok": True, "segmentIndex": payload.get("segmentIndex"), "voices": [voice1, voice2]})
 
 
-@app.api(name="mix", concurrency_limit=1)
 def mix(payload_json: str) -> str:
     payload = json.loads(payload_json)
     require_secret(payload)
@@ -177,7 +172,6 @@ def mix(payload_json: str) -> str:
     return json.dumps({"ok": True, "format": fmt, "mix": "stereo"})
 
 
-@app.api(name="preview", concurrency_limit=1)
 def preview(payload_json: str) -> str:
     payload = json.loads(payload_json)
     require_secret(payload)
@@ -194,5 +188,11 @@ def preview(payload_json: str) -> str:
     return json.dumps({"ok": True, "mimeType": "audio/mpeg", "audio": encoded, "voice": voice})
 
 
+with gr.Blocks(title="DeepCast Kokoro + FFmpeg Worker") as app:
+    gr.Markdown("# DeepCast Kokoro + FFmpeg Worker\nPrivate API worker for DeepCast Studio.")
+    gr.api(synthesize, api_name="synthesize")
+    gr.api(mix, api_name="mix")
+    gr.api(preview, api_name="preview")
+
 if __name__ == "__main__":
-    app.launch(server_name="0.0.0.0", server_port=7860)
+    app.queue(default_concurrency_limit=1, max_size=12).launch(server_name="0.0.0.0", server_port=7860)

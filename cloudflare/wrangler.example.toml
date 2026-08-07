@@ -36,9 +36,11 @@ queue = "deepcast-episode-jobs"
 max_batch_size = 3
 max_batch_timeout = 5
 max_retries = 2
+max_concurrency = 1
 
 # Set secrets with Wrangler; never commit them:
 # wrangler secret put GROQ_API_KEY               (optional fallback)
 # wrangler secret put TTS_SHARED_SECRET          (required; also store the same value as GitHub Actions secret DEEPCAST_CALLBACK_SECRET)
+# wrangler secret put SITE_SHARED_SECRET         (required for the ChatGPT Site proxy)
 # wrangler secret put GITHUB_ACTIONS_TOKEN        (fine-grained PAT scoped to this repo with Actions: write)
 # wrangler secret put HF_TOKEN                    (optional only if using the hosted Gradio fallback)
