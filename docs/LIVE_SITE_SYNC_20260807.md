@@ -41,19 +41,25 @@ The current live site exposes:
 
 ## Asset state
 
-Recovered and reusable from the restored repository:
+Recovered from the restored repository:
 
 - Blue DeepCast alternate title SVG.
 - Blue DeepDive standalone title SVG.
 - Full historical approved DeepCast SVG asset pack.
 
-Observed on the live deployment but original source not recoverable from available storage:
+Recovered from ChatGPT Library on 2026-08-08:
 
-- `/assets/DeepCast_Projects_Title_Transparent_4K.webp`
-- `/assets/DeepCast_Workspace_Title_Transparent_4K.webp`
+- `DeepCast_Projects_Title_Transparent_4K.png`
+- `DeepCast_Projects_Title_Transparent_4K.svg`
+- `DeepCast_Workspace_Title_Transparent_4K.png`
+- `DeepCast_Workspace_Title_Transparent_4K.svg`
+- `DeepCast_Generate_DeepDive_Button_Transparent_4K.png`
+- `DeepCast_Generate_DeepDive_Button_Transparent_4K.svg`
 
-The source references those live filenames and falls back to text if the files are not present in a standalone clone.
+The controlling recovery package is `DeepCast_UI_Assets_TRUE_TRANSPARENT_PNG_SVG_UPDATED.zip`; the same UI files are also carried into the later COMPLETE APPROVED PNG/SVG packs. The package's transparency QA confirms RGBA PNGs with fully transparent pixels and transparent corners, plus SVG canvases without a background rectangle.
+
+The current web app requests deployment-name WebP variants for Projects and Workspace. Those public deployment files are recovered into `public/assets/` from the live app so the source mirror uses the same paths as production.
 
 ## Important limits
 
-This source sync is evidence-based. The public ChatGPT Site does not expose its complete editable deployment source, secret store, or unpublished server configuration. No claim is made that this commit is byte-identical to the private live deployment.
+This source sync is evidence-based. The public ChatGPT Site does not expose its complete editable deployment source, secret store, or unpublished server configuration. No claim is made that this repository is byte-identical to every private deployment file.

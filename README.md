@@ -17,7 +17,7 @@ The current source sync includes:
 - Gemini 3.6 Flash for current text/script generation and Gemini 3.1 Flash TTS Preview for current speech generation, with segmented synthesis and retry handling for transient TTS failures.
 - The restored Git history preserves the earlier ElevenLabs implementation as historical provenance; the current runtime source uses Gemini TTS.
 
-See [`docs/LIVE_SITE_SYNC_20260807.md`](docs/LIVE_SITE_SYNC_20260807.md).
+See [`docs/LIVE_SITE_SYNC_20260807.md`](docs/LIVE_SITE_SYNC_20260807.md) and [`docs/ASSET_PROVENANCE_20260808.md`](docs/ASSET_PROVENANCE_20260808.md).
 
 ## Current model defaults
 
@@ -55,8 +55,8 @@ GitHub Actions runs `npm ci`, TypeScript linting, and the production build on `m
 
 - The live ChatGPT Site is a separate deployment surface. A GitHub commit does **not** by itself publish the ChatGPT Site.
 - Production secrets, Google OAuth credentials, Cloudflare secrets, and private tokens must stay in deployment secret stores and must never be committed.
-- The restored repository already contains the approved historical DeepCast SVG asset pack. Convenience copies of the active blue DeepCast and DeepDive title art are also exposed under `public/assets/` by the current source sync.
-- Two later live-site title assets are known by deployed filename (`DeepCast_Projects_Title_Transparent_4K.webp` and `DeepCast_Workspace_Title_Transparent_4K.webp`) but their original transparent source files were not recoverable from the available repository/Library surfaces. The UI therefore uses graceful text fallbacks when those deployment-only files are absent.
+- The restored repository contains the historical approved DeepCast SVG asset pack and active blue DeepCast/DeepDive title art.
+- The approved Projects and Workspace title-art originals were recovered from the ChatGPT Library package `DeepCast_UI_Assets_TRUE_TRANSPARENT_PNG_SVG_UPDATED.zip`. The package contains PNG and SVG originals with verified real transparency; deployment-name WebP copies are recovered into `public/assets/` for the current UI.
 
 ## Project boundary
 
