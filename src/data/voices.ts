@@ -1,0 +1,17 @@
+export const GEMINI_VOICES = [
+  ['Achernar','Soft','Higher pitch'], ['Achird','Friendly','Lower middle pitch'],
+  ['Algenib','Gravelly','Lower pitch'], ['Algieba','Smooth','Lower pitch'],
+  ['Alnilam','Firm','Lower middle pitch'], ['Aoede','Breezy','Middle pitch'],
+  ['Autonoe','Bright','Middle pitch'], ['Callirrhoe','Easy-going','Middle pitch'],
+  ['Charon','Informative','Lower pitch'], ['Despina','Smooth','Middle pitch'],
+  ['Enceladus','Breathy','Lower pitch'], ['Erinome','Clear','Middle pitch'],
+  ['Fenrir','Excitable','Lower middle pitch'], ['Gacrux','Mature','Middle pitch'],
+  ['Iapetus','Clear','Lower middle pitch'], ['Kore','Firm','Middle pitch'],
+  ['Laomedeia','Upbeat','Higher pitch'], ['Leda','Youthful','Higher pitch'],
+  ['Orus','Firm','Lower middle pitch'], ['Puck','Upbeat','Middle pitch'],
+  ['Pulcherrima','Forward','Middle pitch'], ['Rasalgethi','Informative','Middle pitch'],
+  ['Sadachbia','Lively','Lower pitch'], ['Sadaltager','Knowledgeable','Middle pitch'],
+  ['Schedar','Even','Lower middle pitch'], ['Sulafat','Warm','Middle pitch'],
+  ['Umbriel','Easy-going','Lower middle pitch'], ['Vindemiatrix','Gentle','Middle pitch'],
+  ['Zephyr','Bright','Higher pitch'], ['Zubenelgenubi','Casual','Lower middle pitch'],
+] as const;

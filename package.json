@@ -2,7 +2,7 @@
   "name": "deepcast-studio",
   "private": true,
   "version": "0.1.0",
-  "description": "AI-hosted multi-voice podcast generator for entertainment, music-industry, and pop-culture deep dives.",
+  "description": "DeepCast Studio - AI-hosted entertainment podcast workspace",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
