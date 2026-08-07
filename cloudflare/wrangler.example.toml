@@ -1,0 +1,39 @@
+name = "deepcast-background-backend"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "gen-lang-client-0517688749"
+PUBLIC_BASE_URL = "https://YOUR-WORKER.workers.dev"
+SCRIPT_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
+GROQ_MODEL = "llama-3.3-70b-versatile"
+KOKORO_SPACE_URL = "https://YOUR-HF-SPACE.hf.space"
+MAX_DAILY_EPISODES = "3"
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "deepcast-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "AUDIO"
+bucket_name = "deepcast-audio"
+
+[[queues.producers]]
+binding = "EPISODE_QUEUE"
+queue = "deepcast-episode-jobs"
+
+[[queues.consumers]]
+queue = "deepcast-episode-jobs"
+max_batch_size = 3
+max_batch_timeout = 5
+max_retries = 2
+
+# Set secrets with Wrangler; never commit them:
+# wrangler secret put GROQ_API_KEY               (optional fallback)
+# wrangler secret put TTS_SHARED_SECRET          (required for hosted Kokoro worker)
+# wrangler secret put HF_TOKEN                   (optional/private Space API access)
