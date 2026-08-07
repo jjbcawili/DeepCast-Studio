@@ -37,11 +37,18 @@ All four corner alpha values are zero for all three PNGs. Hidden RGB under fully
 - Workspace: `4a5289a6780316aff6a4bf64888f6e08bba1339c09ebf972c21e9147e32c6d00`
 - Generate DeepDive: `1a4bf3b29fc3bfe6b7cad3039457f102b7e53ff0a442fe00698e4894941db092`
 
-## Deployment mapping
+## Deployment mapping and GitHub recovery
 
 The live web app uses:
 
 - `/assets/DeepCast_Projects_Title_Transparent_4K.webp`
 - `/assets/DeepCast_Workspace_Title_Transparent_4K.webp`
 
-The GitHub source mirror keeps those deployment paths under `public/assets/`.
+Recovery commit `9110cab6f6ab297f0eb91efbe419173a8d155b0c` copied those current deployment WebPs into the GitHub source mirror under `public/assets/`.
+
+GitHub blob identities after recovery:
+
+- Projects WebP: `0531e68b7fdb81ad7dbd25688b8beb5ee0fdc580`
+- Workspace WebP: `47b66bae09677ff312536b08d00914e6bdfe0a20`
+
+The temporary one-shot recovery workflow removed itself in the same asset-sync commit. The permanent `Build QA` workflow remains the source validation gate.
