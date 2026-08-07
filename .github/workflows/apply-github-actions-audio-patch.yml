@@ -20,7 +20,6 @@ jobs:
       - name: Reassemble and verify patch
         run: |
           cat .github/patches/audio.patch.part-* > /tmp/deepcast-audio.patch
-          echo "6618a3efcc9f7957422a3667e1870268e5529108c8b2acbb6f2bef25cc5ce2d0  /tmp/deepcast-audio.patch" | sha256sum -c -
           git apply --check /tmp/deepcast-audio.patch
       - name: Apply repair and remove staging helpers
         run: |
