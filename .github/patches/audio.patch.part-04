@@ -1,0 +1,56 @@
+istory.
+ 
+@@ -28,8 +28,16 @@
+ 
+ ## Audio
+ 
+-The queue calls the companion `tts-worker/` Gradio service. It uses Kokoro stock voices for separate Jiro/Sharpay casting, returns each synthesized segment to R2, then runs the final FFmpeg mix after every segment is present.
++The queue primarily dispatches the companion `.github/workflows/deepcast-audio.yml` workflow. Because this repository is public, standard GitHub-hosted Actions runners can provide the on-demand Linux machine for Kokoro and FFmpeg without a home PC. Each segment uploads back to R2; completed segments are preserved, and the final FFmpeg mix runs only after every segment is present. The older Gradio/Space path remains optional fallback code, not the required no-payment lane.
+ 
+ ## Deployment
+ 
+ Copy `wrangler.example.toml` to `wrangler.toml`, create the D1/R2/Queue resources, apply `migrations/0001_background_jobs.sql`, then set deployment secrets. Never commit real secrets.
++
++
++## GitHub Actions audio runner secrets
++
++- Cloudflare secret `GITHUB_ACTIONS_TOKEN`: fine-grained token restricted to this repository with **Actions: write** so the Worker can dispatch `deepcast-audio.yml`.
++- GitHub Actions repository secret `DEEPCAST_CALLBACK_SECRET`: must equal Cloudflare `TTS_SHARED_SECRET`. It authorizes the ephemeral runner to fetch job payloads and upload audio callbacks without exposing the secret in workflow inputs or source.
++
++The workflow uses only `contents: read`; its callback authority comes from the repository secret.
+--- a/docs/BACKGROUND_JOB_REPAIR_20260808.md
++++ b/docs/BACKGROUND_JOB_REPAIR_20260808.md
+@@ -27,12 +27,13 @@
+ 
+ - Cloudflare Workers AI: script generation.
+ - Groq Free: optional fallback and optional single-pass web research when a free API key is configured.
+-- Hugging Face personal ZeroGPU Gradio Space: intended hosted Kokoro + FFmpeg worker, so no home PC/laptop needs to stay on.
++- Public-repository GitHub Actions: primary on-demand Linux runner for Kokoro + FFmpeg, so no home PC/laptop needs to stay on.
++- Hugging Face Gradio/ZeroGPU: optional fallback only; current Hugging Face documentation is inconsistent about whether a free personal account may host a new ZeroGPU Space, so it is not the required production lane.
+ - D1: episode/job state.
+ - R2: audio objects.
+ - Cloudflare Queues: durable orchestration.
+ 
+-The included `tts-worker/` source is deployment-ready source, not proof that a Hugging Face Space has already been provisioned. The current chat tool surface has no Hugging Face account/deployment connector.
++The included `tts-worker/` source now has both a GitHub Actions job entry point and the earlier Gradio service. GitHub Actions still requires two secrets to be configured: a Cloudflare-side fine-grained token with Actions: write for this repository, and a GitHub repository callback secret matching Cloudflare `TTS_SHARED_SECRET`.
+ 
+ ## Login
+ 
+@@ -54,7 +55,7 @@
+ ## Deployment dependencies still required
+ 
+ 1. Provision/configure the Cloudflare D1 database, R2 bucket, Queue, Worker bindings, and secrets.
+-2. Provision the free hosted Kokoro/FFmpeg Space and set `KOKORO_SPACE_URL` + shared secret.
++2. Configure the GitHub Actions audio runner secrets (`GITHUB_ACTIONS_TOKEN` in Cloudflare and `DEEPCAST_CALLBACK_SECRET` in GitHub, matching Cloudflare `TTS_SHARED_SECRET`).
+ 3. Configure Firebase Authentication providers in the Firebase console (Google, Email/Password, Anonymous).
+ 4. Point the Site server at `DEEPCAST_BACKEND_URL`; configure `CHATGPT_SIGN_IN_URL` only if the Sites runtime provides a supported handoff.
+ 5. Publish through the ChatGPT Sites editor/runtime. GitHub commits alone do not publish the Site.
+--- a/tts-worker/README.md
++++ b/tts-worker/README.md
+@@ -1,6 +1,6 @@
+ # DeepCast hosted Kokoro + FFmpeg worker
+ 
+-This folder is designed for a personal Hugging Face Gradio Space so DeepCast does **not** need a home PC or laptop for TTS/mixing.
++This folder supports two compute modes so DeepCast does **not** need a home PC or laptop for TTS/mixing. The primary no-payment lane is the public repository’s standard GitHub-hosted Actions runner. The Gradio service remains an optional fallback.
+ 
+ ## Why this worker

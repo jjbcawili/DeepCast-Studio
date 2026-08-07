@@ -1,0 +1,50 @@
+name: Apply GitHub Actions Audio Repair
+
+on:
+  push:
+    branches:
+      - repair/github-actions-audio-20260808
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-qa:
+    if: contains(github.event.head_commit.message, 'Stage GitHub Actions audio repair patch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: repair/github-actions-audio-20260808
+          fetch-depth: 0
+      - name: Reassemble and verify patch
+        run: |
+          cat .github/patches/audio.patch.part-* > /tmp/deepcast-audio.patch
+          echo "6618a3efcc9f7957422a3667e1870268e5529108c8b2acbb6f2bef25cc5ce2d0  /tmp/deepcast-audio.patch" | sha256sum -c -
+          git apply --check /tmp/deepcast-audio.patch
+      - name: Apply repair and remove staging helpers
+        run: |
+          git apply /tmp/deepcast-audio.patch
+          rm -f .github/patches/audio.patch.part-*
+          rm -f .github/workflows/apply-github-actions-audio-patch.yml
+          rmdir .github/patches 2>/dev/null || true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Install missing React type declarations for QA
+        run: npm install --no-save --no-package-lock @types/react@^19.0.10 @types/react-dom@^19.0.4
+      - run: npm run lint
+      - run: npm run build
+      - name: Syntax-check Cloudflare background worker
+        run: npx esbuild cloudflare/src/index.ts --bundle --platform=browser --format=esm --external:jose --outfile=/tmp/deepcast-background-worker.js
+      - name: Syntax-check both audio worker entry points
+        run: python -m py_compile tts-worker/app.py tts-worker/job.py
+      - name: Commit verified repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Use GitHub Actions for no-PC Kokoro audio"
+          git push origin HEAD:repair/github-actions-audio-20260808
