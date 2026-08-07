@@ -15,5 +15,11 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: Install missing React type declarations for QA
+        run: npm install --no-save --no-package-lock @types/react@^19.0.10 @types/react-dom@^19.0.4
       - run: npm run lint
       - run: npm run build
+      - name: Syntax-check Cloudflare background worker
+        run: npx esbuild cloudflare/src/index.ts --bundle --platform=browser --format=esm --external:jose --outfile=/tmp/deepcast-background-worker.js
+      - name: Syntax-check hosted Kokoro worker
+        run: python -m py_compile tts-worker/app.py
