@@ -7,7 +7,11 @@ FIREBASE_PROJECT_ID = "gen-lang-client-0517688749"
 PUBLIC_BASE_URL = "https://YOUR-WORKER.workers.dev"
 SCRIPT_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
 GROQ_MODEL = "llama-3.3-70b-versatile"
-KOKORO_SPACE_URL = "https://YOUR-HF-SPACE.hf.space"
+GITHUB_REPO = "jjbcawili/DeepCast-Studio"
+GITHUB_AUDIO_WORKFLOW = "deepcast-audio.yml"
+GITHUB_AUDIO_REF = "main"
+# Optional fallback only; GitHub Actions is the no-PC primary audio runner.
+KOKORO_SPACE_URL = ""
 MAX_DAILY_EPISODES = "3"
 
 [ai]
@@ -35,5 +39,6 @@ max_retries = 2
 
 # Set secrets with Wrangler; never commit them:
 # wrangler secret put GROQ_API_KEY               (optional fallback)
-# wrangler secret put TTS_SHARED_SECRET          (required for hosted Kokoro worker)
-# wrangler secret put HF_TOKEN                   (optional/private Space API access)
+# wrangler secret put TTS_SHARED_SECRET          (required; also store the same value as GitHub Actions secret DEEPCAST_CALLBACK_SECRET)
+# wrangler secret put GITHUB_ACTIONS_TOKEN        (fine-grained PAT scoped to this repo with Actions: write)
+# wrangler secret put HF_TOKEN                    (optional only if using the hosted Gradio fallback)
