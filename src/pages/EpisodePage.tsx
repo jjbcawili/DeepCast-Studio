@@ -44,11 +44,12 @@ export function EpisodePage(){
   if(!episode)return <div className="page"><Link className="back-link" to="/deep-dives">← BACK TO DEEP DIVES</Link><section className="section-block"><h1>EPISODE NOT FOUND</h1><p>This episode shell is not present on this device.</p></section></div>;
 
   async function action(kind:'retry'|'cancel'|'audio'){
-    if(!episode.remoteId)return;
+    const current=episode;
+    if(!current?.remoteId)return;
     setActionBusy(true);setActionError('');
     try{
-      const result=kind==='retry'?await api.retryEpisode(episode.remoteId):kind==='cancel'?await api.cancelEpisode(episode.remoteId):await api.generateAudio(episode.remoteId);
-      const merged={...episode,...result.episode,id:episode.id,remoteId:result.episode.id||result.episode.remoteId||episode.remoteId};
+      const result=kind==='retry'?await api.retryEpisode(current.remoteId):kind==='cancel'?await api.cancelEpisode(current.remoteId):await api.generateAudio(current.remoteId);
+      const merged={...current,...result.episode,id:current.id,remoteId:result.episode.id||result.episode.remoteId||current.remoteId};
       upsertEpisode(merged);setEpisode(merged);
     }catch(e:any){setActionError(e?.message||'Action failed.');}
     finally{setActionBusy(false);}
