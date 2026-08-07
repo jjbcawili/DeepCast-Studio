@@ -27,12 +27,13 @@ Terminal/error states: `FAILED`, `CANCELLED`. A `SCRIPT_READY` state is supporte
 
 - Cloudflare Workers AI: script generation.
 - Groq Free: optional fallback and optional single-pass web research when a free API key is configured.
-- Hugging Face personal ZeroGPU Gradio Space: intended hosted Kokoro + FFmpeg worker, so no home PC/laptop needs to stay on.
+- Public-repository GitHub Actions: primary on-demand Linux runner for Kokoro + FFmpeg, so no home PC/laptop needs to stay on.
+- Hugging Face Gradio/ZeroGPU: optional fallback only; current Hugging Face documentation is inconsistent about whether a free personal account may host a new ZeroGPU Space, so it is not the required production lane.
 - D1: episode/job state.
 - R2: audio objects.
 - Cloudflare Queues: durable orchestration.
 
-The included `tts-worker/` source is deployment-ready source, not proof that a Hugging Face Space has already been provisioned. The current chat tool surface has no Hugging Face account/deployment connector.
+The included `tts-worker/` source now has both a GitHub Actions job entry point and the earlier Gradio service. GitHub Actions still requires two secrets to be configured: a Cloudflare-side fine-grained token with Actions: write for this repository, and a GitHub repository callback secret matching Cloudflare `TTS_SHARED_SECRET`.
 
 ## Login
 
@@ -54,7 +55,7 @@ Kokoro provides stock voices, not cloned ElevenLabs Jiro/Sharpay voices. The hos
 ## Deployment dependencies still required
 
 1. Provision/configure the Cloudflare D1 database, R2 bucket, Queue, Worker bindings, and secrets.
-2. Provision the free hosted Kokoro/FFmpeg Space and set `KOKORO_SPACE_URL` + shared secret.
+2. Configure the GitHub Actions audio runner secrets (`GITHUB_ACTIONS_TOKEN` in Cloudflare and `DEEPCAST_CALLBACK_SECRET` in GitHub, matching Cloudflare `TTS_SHARED_SECRET`).
 3. Configure Firebase Authentication providers in the Firebase console (Google, Email/Password, Anonymous).
 4. Point the Site server at `DEEPCAST_BACKEND_URL`; configure `CHATGPT_SIGN_IN_URL` only if the Sites runtime provides a supported handoff.
 5. Publish through the ChatGPT Sites editor/runtime. GitHub commits alone do not publish the Site.

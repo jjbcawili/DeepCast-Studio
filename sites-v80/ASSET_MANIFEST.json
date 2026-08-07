@@ -1,0 +1,81 @@
+{
+  "version": 80,
+  "sourceArchive": "https://drive.google.com/file/d/1rdJ3FVOPu5IEuWMbM70IwfnWQzhBkNl2/view?usp=drivesdk",
+  "assets": [
+    {
+      "path": "public/assets/01_DeepCast_Studio_Title_Logo_Blue_Transparent_4K.webp",
+      "size": 2636386,
+      "sha256": "ca113dc8dd573dcbe4e9654995fc22bf97795481ecf9459988b457d463366e50"
+    },
+    {
+      "path": "public/assets/02_DeepCast_Studio_Alt_Title_Blue_Transparent_4K.webp",
+      "size": 2699688,
+      "sha256": "652831921ec864a864075b3b41e9e168fd821e3dfa530eb56e1f05d3a9a09e70"
+    },
+    {
+      "path": "public/assets/04_DeepCast_Alt_Emblem_Blue_Transparent_4K.webp",
+      "size": 9862204,
+      "sha256": "abc8c07cb67f8e2e48e48cb93200808cac9d4aad747e3d33d15778ba22d401a2"
+    },
+    {
+      "path": "public/assets/18_DeepDive_Standalone_Title_Blue_Transparent_4K.webp",
+      "size": 2369866,
+      "sha256": "a6059be53875eca984276f0a9badfde6327252f923971c1dc905a193bf407730"
+    },
+    {
+      "path": "public/assets/DeepCast_Pinned_Title_Transparent_4K.webp",
+      "size": 690738,
+      "sha256": "4e4887f33b7a6a1d5fb67d57a24dff8ffd0b29145ebfc11d29fa994600f843d2"
+    },
+    {
+      "path": "public/assets/DeepCast_Projects_Title_Transparent_4K.webp",
+      "size": 1816508,
+      "sha256": "c5b3edfe3497c74907c03f17fd4cf4a1ae11218b0d592b56094354e7fec84bb8"
+    },
+    {
+      "path": "public/assets/DeepCast_Workspace_Title_Transparent_4K.webp",
+      "size": 1784860,
+      "sha256": "377681d7fda5f03eea2276b4032b70b08fa5c9106aa3506b67413b9cc518516e"
+    },
+    {
+      "path": "public/assets/auto-covers/archive-room.png",
+      "size": 1843418,
+      "sha256": "559751893f5f9601a00aad0eeb644f67f9fffb8eb2f4564a46c070bc4c02e4ed"
+    },
+    {
+      "path": "public/assets/auto-covers/neon-broadcast.png",
+      "size": 1807212,
+      "sha256": "4fc1267b90fcaed68f42477a9fafadaec2f9d0c3e23b7bb6cc8e80b249abfc66"
+    },
+    {
+      "path": "public/assets/auto-covers/pop-stage.png",
+      "size": 2158120,
+      "sha256": "b6a50c3247e3112b1ccd19e663ff338e49e4af814d3e133fff87a7cfb4c5f3fd"
+    },
+    {
+      "path": "public/assets/auto-covers/vinyl-editorial.png",
+      "size": 2083536,
+      "sha256": "b70c14bea82f64e713ee93cf1457100419dac95a733a108f33e20da7e299b8d9"
+    },
+    {
+      "path": "public/favicon.svg",
+      "size": 712,
+      "sha256": "e6d2e59b7b5bbb0342e0fb496dfc262decbfe4426bbb7b047aec8d467d1dc6f7"
+    },
+    {
+      "path": "public/file.svg",
+      "size": 391,
+      "sha256": "2b67812c325c199a02536cdbeea0c593a72f707d323b72ee3e08dbab06753bd4"
+    },
+    {
+      "path": "public/globe.svg",
+      "size": 1035,
+      "sha256": "b614b9bf183925957661ac851498fe1d8029fd43a62fbfed86f9e2624a57e7cf"
+    },
+    {
+      "path": "public/window.svg",
+      "size": 385,
+      "sha256": "644768c4aaeb4767bce293344eeb0c125fb804a94d801440424072202d85e3a1"
+    }
+  ]
+}
