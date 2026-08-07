@@ -15,7 +15,7 @@
 +## Cloudflare / GitHub variables
  
 -- `KOKORO_SPACE_URL=https://<your-space>.hf.space`
-+- `GITHUB_REPO=jjbcawili/DeepCast-Studio 
++- `GITHUB_REPO=jjbcawili/DeepCast-Studio`
 +- `GITHUB_AUDIO_WORKFLOW=deepcast-audio.yml`
 +- `GITHUB_AUDIO_REF=main`
 +- Cloudflare secret `GITHUB_ACTIONS_TOKEN` with Actions: write for this repository
