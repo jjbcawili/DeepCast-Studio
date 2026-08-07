@@ -5,6 +5,7 @@ type Env = {
   FIREBASE_PROJECT_ID: string; PUBLIC_BASE_URL: string; SCRIPT_MODEL?: string;
   GROQ_API_KEY?: string; GROQ_MODEL?: string; KOKORO_SPACE_URL?: string;
   TTS_SHARED_SECRET?: string; HF_TOKEN?: string; MAX_DAILY_EPISODES?: string;
+  GITHUB_ACTIONS_TOKEN?: string; GITHUB_REPO?: string; GITHUB_AUDIO_WORKFLOW?: string; GITHUB_AUDIO_REF?: string;
 };
 type QueueJob = { kind:'plan'|'script_segment'|'audio_segment'|'mix_episode'; episodeId:string; segmentIndex?:number };
 
@@ -58,6 +59,15 @@ async function researchWeb(env:Env,topic:string){
   const j:any=await r.json();return String(j.choices?.[0]?.message?.content||'').trim();
 }
 
+async function dispatchGitHubAudio(env:Env,apiName:'synthesize'|'mix',episodeId:string,part:string|number='final') {
+  if(!env.GITHUB_ACTIONS_TOKEN||!env.GITHUB_REPO)throw new Error('GitHub Actions audio runner is not configured.');
+  const workflow=env.GITHUB_AUDIO_WORKFLOW||'deepcast-audio.yml';
+  const ref=env.GITHUB_AUDIO_REF||'main';
+  const endpoint=`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`;
+  const r=await fetch(endpoint,{method:'POST',headers:{Authorization:`Bearer ${env.GITHUB_ACTIONS_TOKEN}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2026-03-10','Content-Type':'application/json'},body:JSON.stringify({ref,inputs:{api_name:apiName,episode_id:episodeId,part:String(part),backend_url:env.PUBLIC_BASE_URL}})});
+  if(!r.ok)throw new Error(`GitHub Actions audio dispatch failed (${r.status}): ${(await r.text()).slice(0,400)}`);
+}
+
 async function gradioCall(env:Env,apiName:string,payload:any){
   if(!env.KOKORO_SPACE_URL)throw new Error('Hosted Kokoro worker is not configured.');
   const base=env.KOKORO_SPACE_URL.replace(/\/$/,''); const headers:any={'Content-Type':'application/json'}; if(env.HF_TOKEN)headers.Authorization=`Bearer ${env.HF_TOKEN}`;
@@ -96,7 +106,7 @@ async function processJob(job:QueueJob,env:Env){
       if(Number(ready.n)===Number(row.expected_segments)){
         const all=(await env.DB.prepare('SELECT script FROM episode_segments WHERE episode_id=? ORDER BY segment_index').bind(row.id).all()).results||[];
         const full=all.map((s:any)=>s.script).join('\n\n');
-        const transition:any=await env.DB.prepare(`UPDATE episodes SET status='AUDIO_QUEUED',progress=58,progress_message=?,script=?,engine=?,audio_queued=1,error=NULL,failed_stage=NULL,updated_at=? WHERE id=? AND audio_queued=0 AND status NOT IN ('CANCELLED','COMPLETE')`).bind('Script complete. Audio segments are queued for the hosted Kokoro worker.',full,'Workers AI / Groq → Kokoro',now(),row.id).run();
+        const transition:any=await env.DB.prepare(`UPDATE episodes SET status='AUDIO_QUEUED',progress=58,progress_message=?,script=?,engine=?,audio_queued=1,error=NULL,failed_stage=NULL,updated_at=? WHERE id=? AND audio_queued=0 AND status NOT IN ('CANCELLED','COMPLETE')`).bind('Script complete. Audio segments are queued for Kokoro on a background compute runner.',full,'Workers AI / Groq → Kokoro → FFmpeg',now(),row.id).run();
         if(Number(transition?.meta?.changes||0)>0){
           await event(env,row.id,'AUDIO_QUEUED','Script complete. Audio generation moved to the background queue.');
           for(let x=0;x<Number(row.expected_segments);x++)await env.EPISODE_QUEUE.send({kind:'audio_segment',episodeId:row.id,segmentIndex:x});
@@ -108,8 +118,9 @@ async function processJob(job:QueueJob,env:Env){
   if(job.kind==='audio_segment'){
     const i=Number(job.segmentIndex);const seg=await env.DB.prepare('SELECT * FROM episode_segments WHERE episode_id=? AND segment_index=?').bind(row.id,i).first();if(!seg?.script||seg.audio_key)return;
     try{
-      await setEpisode(env,row.id,'SYNTHESIZING',Math.max(60,row.progress),`Generating audio segment ${i+1} of ${row.expected_segments} on the hosted Kokoro worker.`);
-      await gradioCall(env,'synthesize',{
+      await setEpisode(env,row.id,'SYNTHESIZING',Math.max(60,row.progress),`Dispatching audio segment ${i+1} of ${row.expected_segments} to the Kokoro compute runner.`);
+      if(env.GITHUB_ACTIONS_TOKEN&&env.GITHUB_REPO) await dispatchGitHubAudio(env,'synthesize',row.id,i);
+      else await gradioCall(env,'synthesize',{
         sharedSecret:env.TTS_SHARED_SECRET,episodeId:row.id,segmentIndex:i,script:seg.script,host1:request.host1||{},host2:request.host2||{},audioOutput:request.audioOutput||'Spatial Stereo',callbackUrl:`${env.PUBLIC_BASE_URL}/internal/audio/${row.id}/${i}?kind=segment&ext=mp3`
       });
     }catch(e:any){await env.DB.prepare('UPDATE episode_segments SET status=?,error=?,updated_at=? WHERE episode_id=? AND segment_index=?').bind('FAILED',e?.message||'Audio segment failed',now(),row.id,i).run();await setEpisode(env,row.id,'FAILED',Math.max(60,row.progress),`Audio segment ${i+1} failed.`,{error:e?.message||'Audio segment failed',failedStage:`audio:${i}`,retryable:1});}
@@ -117,10 +128,14 @@ async function processJob(job:QueueJob,env:Env){
   }
   if(job.kind==='mix_episode'){
     try{
-      await setEpisode(env,row.id,'MIXING',92,'All voice segments are ready. FFmpeg is mixing the final episode.'); const segs=(await env.DB.prepare('SELECT segment_index,audio_key FROM episode_segments WHERE episode_id=? ORDER BY segment_index').bind(row.id).all()).results||[];
-      const urls=segs.map((s:any)=>`${env.PUBLIC_BASE_URL}/internal/audio-object?key=${encodeURIComponent(s.audio_key)}`);
-      const requestedExt=String(request.downloadFormat||'MP3').toLowerCase();const finalExt=['mp3','m4a','wav'].includes(requestedExt)?requestedExt:'mp3';
-      await gradioCall(env,'mix',{sharedSecret:env.TTS_SHARED_SECRET,episodeId:row.id,segmentUrls:urls,downloadFormat:finalExt,audioOutput:request.audioOutput||'Spatial Stereo',musicMode:request.musicMode||'none',callbackUrl:`${env.PUBLIC_BASE_URL}/internal/audio/${row.id}/final?kind=final&ext=${finalExt}`,downloadToken:env.TTS_SHARED_SECRET});
+      await setEpisode(env,row.id,'MIXING',92,'All voice segments are ready. Dispatching the final FFmpeg mix.');
+      if(env.GITHUB_ACTIONS_TOKEN&&env.GITHUB_REPO) await dispatchGitHubAudio(env,'mix',row.id,'final');
+      else {
+        const segs=(await env.DB.prepare('SELECT segment_index,audio_key FROM episode_segments WHERE episode_id=? ORDER BY segment_index').bind(row.id).all()).results||[];
+        const urls=segs.map((s:any)=>`${env.PUBLIC_BASE_URL}/internal/audio-object?key=${encodeURIComponent(s.audio_key)}`);
+        const requestedExt=String(request.downloadFormat||'MP3').toLowerCase();const finalExt=['mp3','m4a','wav'].includes(requestedExt)?requestedExt:'mp3';
+        await gradioCall(env,'mix',{sharedSecret:env.TTS_SHARED_SECRET,episodeId:row.id,segmentUrls:urls,downloadFormat:finalExt,audioOutput:request.audioOutput||'Spatial Stereo',musicMode:request.musicMode||'none',callbackUrl:`${env.PUBLIC_BASE_URL}/internal/audio/${row.id}/final?kind=final&ext=${finalExt}`,downloadToken:env.TTS_SHARED_SECRET});
+      }
     }catch(e:any){await setEpisode(env,row.id,'FAILED',92,'Final audio mix failed.',{error:e?.message||'Mix failed',failedStage:'mix',retryable:1});}
   }
 }
@@ -128,7 +143,7 @@ async function processJob(job:QueueJob,env:Env){
 async function handle(req:Request,env:Env){
   const url=new URL(req.url); const cors=originHeaders(req); if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors});
   try{
-    if(url.pathname==='/api/health')return reply({ok:true,architecture:'durable episode shell + queue + D1/R2',kokoroConfigured:!!env.KOKORO_SPACE_URL},200,cors);
+    if(url.pathname==='/api/health')return reply({ok:true,architecture:'durable episode shell + queue + D1/R2',audioRunner:env.GITHUB_ACTIONS_TOKEN&&env.GITHUB_REPO?'github-actions':env.KOKORO_SPACE_URL?'hosted-gradio':'unconfigured'},200,cors);
     if(url.pathname==='/api/episodes'&&req.method==='POST'){
       const u=await firebaseUser(req,env); const since=new Date(Date.now()-86400000).toISOString();const count:any=await env.DB.prepare('SELECT COUNT(*) n FROM episodes WHERE user_id=? AND created_at>=?').bind(u.uid,since).first();const cap=Math.max(1,Number(env.MAX_DAILY_EPISODES||3));if(Number(count?.n||0)>=cap)return reply({error:`Daily safety cap reached (${cap} episodes). This prevents runaway free-tier usage.`},429,cors);
       const b:any=await req.json();if(!String(b.prompt||'').trim()&&!String(b.scriptGuidance||'').trim())return reply({error:'Prompt or script guidance is required.'},400,cors);const episodeId=id('ep');const created=now();await env.DB.prepare(`INSERT INTO episodes(id,user_id,local_episode_id,title,prompt,project_id,format,runtime,request_json,status,progress,progress_message,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(episodeId,u.uid,b.localEpisodeId||null,b.episodeTitle||'Untitled Deep Dive',b.prompt||b.scriptGuidance,b.projectId||null,b.format||'Deep Dive',b.runtime||'45',JSON.stringify(b),'QUEUED',5,'Episode accepted. Waiting for the background script queue.',created,created).run();await event(env,episodeId,'QUEUED','Episode accepted by the background queue.');await env.EPISODE_QUEUE.send({kind:'plan',episodeId});return reply({episode:await episodeJson(env,await getEpisodeRow(env,episodeId))},202,cors);
@@ -158,6 +173,25 @@ async function handle(req:Request,env:Env){
     const cancel=url.pathname.match(/^\/api\/episodes\/([^/]+)\/cancel$/);if(cancel&&req.method==='POST'){const {row}=await assertOwner(req,env,cancel[1]);if(['COMPLETE','CANCELLED'].includes(row.status))return reply({episode:await episodeJson(env,row)},200,cors);await setEpisode(env,row.id,'CANCELLED',row.progress,'Generation cancelled. Existing script/audio segments were preserved.',{retryable:0});return reply({episode:await episodeJson(env,await getEpisodeRow(env,row.id))},200,cors);}
     const audio=url.pathname.match(/^\/api\/episodes\/([^/]+)\/audio$/);if(audio&&req.method==='POST'){const {row}=await assertOwner(req,env,audio[1]);if(row.status!=='SCRIPT_READY')return reply({error:'Audio can only be started from SCRIPT READY.'},409,cors);const transition:any=await env.DB.prepare(`UPDATE episodes SET status='AUDIO_QUEUED',progress=58,progress_message=?,audio_queued=1,updated_at=? WHERE id=? AND audio_queued=0`).bind('Audio generation queued.',now(),row.id).run();if(Number(transition?.meta?.changes||0)>0){await event(env,row.id,'AUDIO_QUEUED','Audio generation queued.');const missing=(await env.DB.prepare('SELECT segment_index FROM episode_segments WHERE episode_id=? AND script IS NOT NULL AND audio_key IS NULL ORDER BY segment_index').bind(row.id).all()).results||[];for(const seg of missing)await env.EPISODE_QUEUE.send({kind:'audio_segment',episodeId:row.id,segmentIndex:Number((seg as any).segment_index)});}return reply({episode:await episodeJson(env,await getEpisodeRow(env,row.id))},202,cors);}
     const asset=url.pathname.match(/^\/public\/assets\/([^/]+)$/);if(asset&&req.method==='GET'){const a=await env.DB.prepare('SELECT * FROM episode_assets WHERE access_token=?').bind(asset[1]).first();if(!a)return new Response('Not found',{status:404});const obj=await env.AUDIO.get(a.r2_key);if(!obj)return new Response('Not found',{status:404});const h=new Headers();h.set('Content-Type',a.kind==='mp3'?'audio/mpeg':a.kind==='m4a'?'audio/mp4':a.kind==='wav'?'audio/wav':'application/octet-stream');h.set('Content-Disposition',`inline; filename="deepcast-${a.episode_id}.${a.kind}"`);h.set('Cache-Control','private, max-age=3600');return new Response(obj.body,{headers:h});}
+    const jobPayload=url.pathname.match(/^\/internal\/audio-job\/([^/]+)\/([^/]+)$/);if(jobPayload&&req.method==='GET'){
+      if(!env.TTS_SHARED_SECRET||req.headers.get('authorization')!==`Bearer ${env.TTS_SHARED_SECRET}`)return new Response('Forbidden',{status:403});
+      const episodeId=jobPayload[1],part=jobPayload[2];const row=await getEpisodeRow(env,episodeId);if(!row)return reply({error:'Episode not found'},404,cors);if(row.status==='CANCELLED')return reply({error:'Episode cancelled'},409,cors);
+      const request=JSON.parse(row.request_json||'{}');
+      if(part==='final'){
+        const segs=(await env.DB.prepare('SELECT segment_index,audio_key FROM episode_segments WHERE episode_id=? AND audio_key IS NOT NULL ORDER BY segment_index').bind(episodeId).all()).results||[];
+        const requestedExt=String(request.downloadFormat||'MP3').toLowerCase();const finalExt=['mp3','m4a','wav'].includes(requestedExt)?requestedExt:'mp3';
+        return reply({episodeId,segmentUrls:segs.map((s:any)=>`${env.PUBLIC_BASE_URL}/internal/audio-object?key=${encodeURIComponent(s.audio_key)}`),downloadFormat:finalExt,audioOutput:request.audioOutput||'Spatial Stereo',musicMode:request.musicMode||'none',callbackUrl:`${env.PUBLIC_BASE_URL}/internal/audio/${episodeId}/final?kind=final&ext=${finalExt}`},200,cors);
+      }
+      const i=Number(part);const seg=await env.DB.prepare('SELECT * FROM episode_segments WHERE episode_id=? AND segment_index=?').bind(episodeId,i).first();if(!seg?.script)return reply({error:'Script segment not ready'},409,cors);
+      return reply({episodeId,segmentIndex:i,script:seg.script,host1:request.host1||{},host2:request.host2||{},audioOutput:request.audioOutput||'Spatial Stereo',callbackUrl:`${env.PUBLIC_BASE_URL}/internal/audio/${episodeId}/${i}?kind=segment&ext=mp3`},200,cors);
+    }
+    const statusUpdate=url.pathname.match(/^\/internal\/audio-status\/([^/]+)$/);if(statusUpdate&&req.method==='POST'){
+      if(!env.TTS_SHARED_SECRET||req.headers.get('authorization')!==`Bearer ${env.TTS_SHARED_SECRET}`)return new Response('Forbidden',{status:403});
+      const b:any=await req.json();const row=await getEpisodeRow(env,statusUpdate[1]);if(!row)return reply({error:'Episode not found'},404,cors);if(row.status==='CANCELLED')return reply({ok:false,cancelled:true},409,cors);
+      const allowed=new Set(['SYNTHESIZING','MIXING','FAILED']);const status=allowed.has(String(b.status))?String(b.status):'SYNTHESIZING';
+      await setEpisode(env,row.id,status,Math.max(0,Math.min(100,Number(b.progress??row.progress))),String(b.message||'Audio worker status update.'),{error:b.error?String(b.error):null,failedStage:b.failedStage?String(b.failedStage):null,retryable:status==='FAILED'?1:1});
+      return reply({ok:true},200,cors);
+    }
     const upload=url.pathname.match(/^\/internal\/audio\/([^/]+)\/([^/]+)$/);if(upload&&req.method==='PUT'){
       if(!env.TTS_SHARED_SECRET||req.headers.get('authorization')!==`Bearer ${env.TTS_SHARED_SECRET}`)return new Response('Forbidden',{status:403});
       if(!req.body)return new Response('Missing body',{status:400});

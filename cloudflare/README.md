@@ -4,7 +4,7 @@ This directory is the source for the **new durable background-generation service
 
 ## Architecture
 
-`DeepCast Site → short POST /api/episodes → D1 episode shell → Cloudflare Queue → Workers AI script → optional Groq web research/fallback → hosted Kokoro worker → FFmpeg → R2 → episode page polling`
+`DeepCast Site → short POST /api/episodes → D1 episode shell → Cloudflare Queue → Workers AI script → optional Groq web research/fallback → GitHub Actions Kokoro/FFmpeg runner → R2 → episode page polling`
 
 A browser tab is no longer the job runner. Every accepted generation has a persistent episode record and progress/event history.
 
@@ -28,8 +28,16 @@ Firebase ID tokens are verified inside the Worker against the configured Firebas
 
 ## Audio
 
-The queue calls the companion `tts-worker/` Gradio service. It uses Kokoro stock voices for separate Jiro/Sharpay casting, returns each synthesized segment to R2, then runs the final FFmpeg mix after every segment is present.
+The queue primarily dispatches the companion `.github/workflows/deepcast-audio.yml` workflow. Because this repository is public, standard GitHub-hosted Actions runners can provide the on-demand Linux machine for Kokoro and FFmpeg without a home PC. Each segment uploads back to R2; completed segments are preserved, and the final FFmpeg mix runs only after every segment is present. The older Gradio/Space path remains optional fallback code, not the required no-payment lane.
 
 ## Deployment
 
 Copy `wrangler.example.toml` to `wrangler.toml`, create the D1/R2/Queue resources, apply `migrations/0001_background_jobs.sql`, then set deployment secrets. Never commit real secrets.
+
+
+## GitHub Actions audio runner secrets
+
+- Cloudflare secret `GITHUB_ACTIONS_TOKEN`: fine-grained token restricted to this repository with **Actions: write** so the Worker can dispatch `deepcast-audio.yml`.
+- GitHub Actions repository secret `DEEPCAST_CALLBACK_SECRET`: must equal Cloudflare `TTS_SHARED_SECRET`. It authorizes the ephemeral runner to fetch job payloads and upload audio callbacks without exposing the secret in workflow inputs or source.
+
+The workflow uses only `contents: read`; its callback authority comes from the repository secret.

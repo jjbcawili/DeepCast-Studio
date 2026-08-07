@@ -1,0 +1,57 @@
+name: DeepCast Audio Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_name:
+        description: Kokoro action to run
+        required: true
+        type: choice
+        options: [synthesize, mix]
+      episode_id:
+        description: DeepCast episode ID
+        required: true
+        type: string
+      part:
+        description: Segment index or final
+        required: true
+        type: string
+      backend_url:
+        description: Public DeepCast Cloudflare backend URL
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deepcast-audio-${{ inputs.episode_id }}-${{ inputs.api_name }}-${{ inputs.part }}
+  cancel-in-progress: false
+
+jobs:
+  audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tts-worker/requirements.txt
+      - name: Install FFmpeg and eSpeak NG
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng
+      - name: Install Kokoro worker dependencies
+        run: python -m pip install --disable-pip-version-check -r tts-worker/requirements.txt
+      - name: Run Kokoro / FFmpeg job
+        env:
+          DEEPCAST_CALLBACK_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
+        run: |
+          cd tts-worker
+          python job.py \
+            --backend '${{ inputs.backend_url }}' \
+            --episode '${{ inputs.episode_id }}' \
+            --api-name '${{ inputs.api_name }}' \
+            --part '${{ inputs.part }}'
