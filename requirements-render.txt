@@ -1,0 +1,5 @@
+boto3==1.40.1
+kokoro>=0.9.4
+numpy>=2.0.0
+requests>=2.32.0
+soundfile>=0.13.1

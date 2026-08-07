@@ -1,0 +1,41 @@
+name: DeepCast episode renderer
+
+on:
+  repository_dispatch:
+    types: [deepcast-render]
+
+concurrency:
+  group: deepcast-${{ github.event.client_payload.episodeId }}
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-render.txt
+      - name: Install system audio tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng
+      - name: Install Kokoro runner
+        run: pip install -r requirements-render.txt
+      - name: Render episode in background
+        env:
+          EPISODE_ID: ${{ github.event.client_payload.episodeId }}
+          DEEPCAST_BACKGROUND_API: ${{ secrets.DEEPCAST_BACKGROUND_API }}
+          DEEPCAST_RUNNER_CALLBACK_SECRET: ${{ secrets.DEEPCAST_RUNNER_CALLBACK_SECRET }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          KOKORO_JIRO_VOICE: ${{ vars.KOKORO_JIRO_VOICE }}
+          KOKORO_SHARPAY_VOICE: ${{ vars.KOKORO_SHARPAY_VOICE }}
+        run: python runner/render_episode.py

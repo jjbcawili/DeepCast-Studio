@@ -1,0 +1,31 @@
+name = "deepcast-background"
+main = "src/index.ts"
+compatibility_date = "2026-08-07"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "deepcast-studio"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[[r2_buckets]]
+binding = "AUDIO"
+bucket_name = "deepcast-studio-audio"
+
+[[queues.producers]]
+binding = "EPISODE_QUEUE"
+queue = "deepcast-episode-jobs"
+
+[[queues.consumers]]
+queue = "deepcast-episode-jobs"
+max_batch_size = 5
+max_batch_timeout = 5
+max_retries = 8
+
+[ai]
+binding = "AI"
+
+# Worker secrets / vars:
+# GITHUB_REPOSITORY=jjbcawili/DeepCast-Studio
+# GITHUB_ACTIONS_TOKEN=<fine-grained token able to repository_dispatch>
+# RUNNER_CALLBACK_SECRET=<long random value>
+# ALLOWED_ORIGIN=https://deepcast-studio.jjbcawili.chatgpt.site
