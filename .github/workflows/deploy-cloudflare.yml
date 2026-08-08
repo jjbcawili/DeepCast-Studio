@@ -183,15 +183,8 @@ jobs:
           set -euo pipefail
           node <<'NODE'
           const fs = require('fs');
-          const crypto = require('crypto');
-          const siteSharedSecret = crypto.randomBytes(32).toString('base64url');
-          console.log(`::add-mask::${siteSharedSecret}`);
-          const publicKey = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuYxceLIq0HmyqXjsJ5MC\ngDnl9Pvt8YLy39AHeBVSpZKtyTpCe84ajUHFSW/Vh8P4wGK7vqV8ALwAvDFEdwZ2\nqOMzygHWXL1IVFF07IfFFsZLwTqUqgX2k7S+aJVAP5iXlcBv52a27U/Mp6EUY43W\n5Yq1tw5Qeg6/69LBj/6WP+eeCbiF0ExjwTfkChsbuUxdSFMTCvb08q8L/hSkf/7S\nGRM7FtIW3ODZlOXqV+X8qwtkz48d5yiy/uP2VXTiruiJUwfGbEdSdvr6ijYcHxzW\nOseGwnBEDp1O+1VOpfLRx6bPqgchKwwGaRTNM/RYv2It3t2K4nXzQEYlPiuZtQTR\ndQIDAQAB\n-----END PUBLIC KEY-----";
-          const encryptedSiteSecret = crypto.publicEncrypt({ key: publicKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' }, Buffer.from(siteSharedSecret));
-          fs.writeFileSync('/tmp/deepcast-site-secret-envelope.txt', encryptedSiteSecret.toString('base64'));
           const secrets = {
             TTS_SHARED_SECRET: process.env.DEEPCAST_CALLBACK_SECRET,
-            SITE_SHARED_SECRET: siteSharedSecret,
             GITHUB_ACTIONS_TOKEN: process.env.DEEPCAST_GITHUB_ACTIONS_TOKEN,
           };
           if (process.env.GROQ_API_KEY) secrets.GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -202,10 +195,6 @@ jobs:
         env:
           WRANGLER_OUTPUT_FILE_PATH: /tmp/deepcast-wrangler-output.ndjson
         run: npx wrangler deploy --config wrangler.ci.toml --secrets-file /tmp/deepcast-worker-secrets.json
-
-      - name: Return encrypted Site shared-secret envelope
-        shell: bash
-        run: echo "::notice title=DeepCast Site secret envelope::SITE_SECRET_CIPHERTEXT=$(cat /tmp/deepcast-site-secret-envelope.txt)"
 
       - name: Verify deployed Worker and audio runner
         env:
