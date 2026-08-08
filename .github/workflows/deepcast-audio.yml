@@ -48,6 +48,7 @@ jobs:
       - name: Run Kokoro / FFmpeg job
         env:
           DEEPCAST_CALLBACK_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
+          TTS_SHARED_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
         run: |
           cd tts-worker
           python job.py \
