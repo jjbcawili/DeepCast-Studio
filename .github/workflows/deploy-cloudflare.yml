@@ -1,0 +1,236 @@
+name: Cloudflare Bootstrap & Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-cloudflare.yml'
+      - 'cloudflare/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deepcast-cloudflare-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Provision and deploy DeepCast backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: cloudflare
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      DEEPCAST_CALLBACK_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
+      DEEPCAST_GITHUB_ACTIONS_TOKEN: ${{ secrets.DEEPCAST_GITHUB_ACTIONS_TOKEN }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      WORKER_NAME: deepcast-background-backend
+      D1_NAME: deepcast-db
+      R2_NAME: deepcast-audio
+      QUEUE_NAME: deepcast-episode-jobs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate required GitHub secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID DEEPCAST_CALLBACK_SECRET DEEPCAST_GITHUB_ACTIONS_TOKEN; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Required GitHub Actions secret $name is missing or empty."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+
+      - name: Install Cloudflare worker dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Verify Cloudflare authentication
+        run: npx wrangler whoami
+
+      - name: Resolve workers.dev subdomain
+        id: subdomain
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESPONSE="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain")"
+          SUBDOMAIN="$(node -e 'const j=JSON.parse(process.argv[1]); if(!j.success||!j.result?.subdomain) process.exit(2); process.stdout.write(j.result.subdomain)' "$RESPONSE")"
+          PUBLIC_BASE_URL="https://${WORKER_NAME}.${SUBDOMAIN}.workers.dev"
+          echo "subdomain=$SUBDOMAIN" >> "$GITHUB_OUTPUT"
+          echo "public_base_url=$PUBLIC_BASE_URL" >> "$GITHUB_OUTPUT"
+          echo "Resolved production URL: $PUBLIC_BASE_URL"
+
+      - name: Ensure D1 database exists
+        id: d1
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_LIST="$(npx wrangler d1 list --json)"
+          DB_ID="$(node -e 'const j=JSON.parse(process.argv[1]); const a=Array.isArray(j)?j:(j.result||[]); const d=a.find(x=>x.name===process.env.D1_NAME); if(d) process.stdout.write(d.uuid||d.id||d.database_id||"")' "$DB_LIST")"
+          if [ -z "$DB_ID" ]; then
+            echo "D1 database $D1_NAME is missing; creating it."
+            npx wrangler d1 create "$D1_NAME"
+            DB_LIST="$(npx wrangler d1 list --json)"
+            DB_ID="$(node -e 'const j=JSON.parse(process.argv[1]); const a=Array.isArray(j)?j:(j.result||[]); const d=a.find(x=>x.name===process.env.D1_NAME); if(d) process.stdout.write(d.uuid||d.id||d.database_id||"")' "$DB_LIST")"
+          else
+            echo "Reusing existing D1 database $D1_NAME."
+          fi
+          if [ -z "$DB_ID" ]; then
+            echo "::error::Could not resolve the D1 database ID for $D1_NAME."
+            exit 1
+          fi
+          echo "database_id=$DB_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure R2 bucket exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if npx wrangler r2 bucket list | grep -Fq "$R2_NAME"; then
+            echo "Reusing existing R2 bucket $R2_NAME."
+          else
+            echo "R2 bucket $R2_NAME is missing; creating it."
+            npx wrangler r2 bucket create "$R2_NAME"
+          fi
+
+      - name: Ensure Queue exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if npx wrangler queues list | grep -Fq "$QUEUE_NAME"; then
+            echo "Reusing existing Queue $QUEUE_NAME."
+          else
+            echo "Queue $QUEUE_NAME is missing; creating it."
+            npx wrangler queues create "$QUEUE_NAME"
+          fi
+
+      - name: Generate production Wrangler configuration
+        env:
+          D1_DATABASE_ID: ${{ steps.d1.outputs.database_id }}
+          PUBLIC_BASE_URL: ${{ steps.subdomain.outputs.public_base_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const q = value => JSON.stringify(String(value));
+          const config = `name = "deepcast-background-backend"
+          main = "src/index.ts"
+          compatibility_date = "2026-08-01"
+          workers_dev = true
+
+          [vars]
+          FIREBASE_PROJECT_ID = "gen-lang-client-0517688749"
+          PUBLIC_BASE_URL = ${q(process.env.PUBLIC_BASE_URL)}
+          SCRIPT_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
+          GROQ_MODEL = "llama-3.3-70b-versatile"
+          GITHUB_REPO = "jjbcawili/DeepCast-Studio"
+          GITHUB_AUDIO_WORKFLOW = "deepcast-audio.yml"
+          GITHUB_AUDIO_REF = "main"
+          KOKORO_SPACE_URL = ""
+          MAX_DAILY_EPISODES = "3"
+
+          [ai]
+          binding = "AI"
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "deepcast-db"
+          database_id = ${q(process.env.D1_DATABASE_ID)}
+          migrations_dir = "migrations"
+
+          [[r2_buckets]]
+          binding = "AUDIO"
+          bucket_name = "deepcast-audio"
+
+          [[queues.producers]]
+          binding = "EPISODE_QUEUE"
+          queue = "deepcast-episode-jobs"
+
+          [[queues.consumers]]
+          queue = "deepcast-episode-jobs"
+          max_batch_size = 3
+          max_batch_timeout = 5
+          max_retries = 2
+          max_concurrency = 1
+          `;
+          fs.writeFileSync('wrangler.ci.toml', config);
+          NODE
+          npx wrangler deploy --dry-run --config wrangler.ci.toml
+
+      - name: Apply outstanding D1 migrations
+        run: npx wrangler d1 migrations apply "$D1_NAME" --remote --config wrangler.ci.toml
+
+      - name: Prepare encrypted Worker secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const secrets = {
+            TTS_SHARED_SECRET: process.env.DEEPCAST_CALLBACK_SECRET,
+            GITHUB_ACTIONS_TOKEN: process.env.DEEPCAST_GITHUB_ACTIONS_TOKEN,
+          };
+          if (process.env.GROQ_API_KEY) secrets.GROQ_API_KEY = process.env.GROQ_API_KEY;
+          fs.writeFileSync('/tmp/deepcast-worker-secrets.json', JSON.stringify(secrets));
+          NODE
+
+      - name: Deploy Cloudflare Worker with secrets
+        env:
+          WRANGLER_OUTPUT_FILE_PATH: /tmp/deepcast-wrangler-output.ndjson
+        run: npx wrangler deploy --config wrangler.ci.toml --secrets-file /tmp/deepcast-worker-secrets.json
+
+      - name: Verify deployed Worker and audio runner
+        env:
+          PUBLIC_BASE_URL: ${{ steps.subdomain.outputs.public_base_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f /tmp/deepcast-worker-secrets.json
+          HEALTH=''
+          for attempt in 1 2 3 4 5 6; do
+            if HEALTH="$(curl --fail --silent --show-error "${PUBLIC_BASE_URL}/api/health")"; then
+              break
+            fi
+            echo "Health check attempt $attempt failed; retrying shortly."
+            sleep 5
+          done
+          echo "$HEALTH"
+          node -e 'const j=JSON.parse(process.argv[1]); if(j.ok!==true) throw new Error("Worker health check did not return ok=true"); if(j.audioRunner!=="github-actions") throw new Error(`Expected audioRunner=github-actions, got ${j.audioRunner}`)' "$HEALTH"
+
+      - name: Deployment summary
+        if: success()
+        env:
+          PUBLIC_BASE_URL: ${{ steps.subdomain.outputs.public_base_url }}
+          D1_DATABASE_ID: ${{ steps.d1.outputs.database_id }}
+        shell: bash
+        run: |
+          {
+            echo '## DeepCast Cloudflare deployment'
+            echo ''
+            echo "- Worker: \`$WORKER_NAME\`"
+            echo "- URL: $PUBLIC_BASE_URL"
+            echo "- D1: \`$D1_NAME\` (\`$D1_DATABASE_ID\`)"
+            echo "- R2: \`$R2_NAME\`"
+            echo "- Queue: \`$QUEUE_NAME\`"
+            echo '- Workers AI binding: `AI`'
+            echo '- Audio runner: `github-actions`'
+            echo '- D1 migrations: applied/up to date'
+            if [ -n "${GROQ_API_KEY:-}" ]; then echo '- Groq: configured'; else echo '- Groq: not configured (optional)'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
