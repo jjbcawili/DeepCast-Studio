@@ -73,7 +73,7 @@ async function dispatchGitHubAudio(env:Env,apiName:'synthesize'|'mix',episodeId:
   const workflow=env.GITHUB_AUDIO_WORKFLOW||'deepcast-audio.yml';
   const ref=env.GITHUB_AUDIO_REF||'main';
   const endpoint=`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`;
-  const r=await fetch(endpoint,{method:'POST',headers:{Authorization:`Bearer ${env.GITHUB_ACTIONS_TOKEN}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2026-03-10','Content-Type':'application/json'},body:JSON.stringify({ref,inputs:{api_name:apiName,episode_id:episodeId,part:String(part),backend_url:env.PUBLIC_BASE_URL}})});
+  const r=await fetch(endpoint,{method:'POST',headers:{Authorization:`Bearer ${env.GITHUB_ACTIONS_TOKEN}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2026-03-10','Content-Type':'application/json','User-Agent':'DeepCast-Studio-Cloudflare-Worker'},body:JSON.stringify({ref,inputs:{api_name:apiName,episode_id:episodeId,part:String(part),backend_url:env.PUBLIC_BASE_URL}})});
   if(!r.ok)throw new Error(`GitHub Actions audio dispatch failed (${r.status}): ${(await r.text()).slice(0,400)}`);
 }
 
