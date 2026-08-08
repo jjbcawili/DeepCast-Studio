@@ -185,6 +185,7 @@ jobs:
           const fs = require('fs');
           const secrets = {
             TTS_SHARED_SECRET: process.env.DEEPCAST_CALLBACK_SECRET,
+            SITE_SHARED_SECRET: process.env.DEEPCAST_CALLBACK_SECRET,
             GITHUB_ACTIONS_TOKEN: process.env.DEEPCAST_GITHUB_ACTIONS_TOKEN,
           };
           if (process.env.GROQ_API_KEY) secrets.GROQ_API_KEY = process.env.GROQ_API_KEY;
