@@ -196,7 +196,7 @@ jobs:
           WRANGLER_OUTPUT_FILE_PATH: /tmp/deepcast-wrangler-output.ndjson
         run: npx wrangler deploy --config wrangler.ci.toml --secrets-file /tmp/deepcast-worker-secrets.json
 
-      - name: Verify deployed Worker and audio runner
+      - name: Verify deployed Worker and Chatterbox voice cloning
         env:
           PUBLIC_BASE_URL: ${{ steps.subdomain.outputs.public_base_url }}
         shell: bash
@@ -212,7 +212,13 @@ jobs:
             sleep 5
           done
           echo "$HEALTH"
-          node -e 'const j=JSON.parse(process.argv[1]); if(j.ok!==true) throw new Error("Worker health check did not return ok=true"); if(j.audioRunner!=="github-actions") throw new Error(`Expected audioRunner=github-actions, got ${j.audioRunner}`)' "$HEALTH"
+          node -e '
+            const j=JSON.parse(process.argv[1]);
+            if(j.ok!==true) throw new Error("Worker health check did not return ok=true");
+            if(j.audioRunner!=="github-actions") throw new Error(`Expected audioRunner=github-actions, got ${j.audioRunner}`);
+            if(!Array.isArray(j.ttsEngines)||!j.ttsEngines.includes("chatterbox-nano")||!j.ttsEngines.includes("chatterbox-turbo")||!j.ttsEngines.includes("kokoro")) throw new Error(`Unexpected TTS engines: ${JSON.stringify(j.ttsEngines)}`);
+            if(j.voiceCloning!=="private-r2-reference-audio") throw new Error(`Unexpected voiceCloning=${j.voiceCloning}`);
+          ' "$HEALTH"
 
       - name: Deployment summary
         if: success()
@@ -231,6 +237,8 @@ jobs:
             echo "- Queue: \`$QUEUE_NAME\`"
             echo '- Workers AI binding: `AI`'
             echo '- Audio runner: `github-actions`'
+            echo '- TTS engines: `chatterbox-nano`, `chatterbox-turbo`, `kokoro`'
+            echo '- Voice cloning references: private R2 objects with authenticated internal fetch'
             echo '- D1 migrations: applied/up to date'
             if [ -n "${GROQ_API_KEY:-}" ]; then echo '- Groq: configured'; else echo '- Groq: not configured (optional)'; fi
           } >> "$GITHUB_STEP_SUMMARY"
