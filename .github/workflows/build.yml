@@ -21,5 +21,5 @@ jobs:
       - run: npm run build
       - name: Syntax-check Cloudflare background worker
         run: npx esbuild cloudflare/src/index.ts --bundle --platform=browser --format=esm --external:jose --outfile=/tmp/deepcast-background-worker.js
-      - name: Syntax-check hosted Kokoro worker
-        run: python -m py_compile tts-worker/app.py tts-worker/job.py
+      - name: Syntax-check DeepCast TTS worker
+        run: python -m py_compile tts-worker/app.py tts-worker/job.py tts-worker/chatterbox_engine.py
