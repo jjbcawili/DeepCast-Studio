@@ -43,11 +43,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: deepcast-chatterbox-0.1.7-${{ runner.os }}
+          key: deepcast-chatterbox-nano-5de7a54-${{ runner.os }}
       - name: Install FFmpeg and eSpeak NG
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng
+      - name: Install CPU-only PyTorch
+        run: python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 torchaudio==2.6.0
       - name: Install DeepCast TTS worker dependencies
         run: python -m pip install --disable-pip-version-check -r tts-worker/requirements.txt
       - name: Run Chatterbox / Kokoro / FFmpeg job
