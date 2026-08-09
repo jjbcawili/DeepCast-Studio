@@ -1,5 +1,5 @@
 gradio==6.8.0
-chatterbox-tts==0.1.7
+chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox.git@5de7a54aa4e5e2baadb0182dde554908b48b85c2
 kokoro>=0.9.4
 numpy>=1.26.0,<2.0.0
 requests>=2.32.0
