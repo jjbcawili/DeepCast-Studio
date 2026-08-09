@@ -10,6 +10,7 @@ import requests
 import soundfile as sf
 import gradio as gr
 from kokoro import KPipeline
+from chatterbox_engine import download_reference, synthesize_chatterbox
 
 SAMPLE_RATE = 24000
 SHARED_SECRET = os.environ.get("TTS_SHARED_SECRET", "")
@@ -59,6 +60,21 @@ def stereo_turn(audio: np.ndarray, pan: float):
 
 def standard_stereo(audio: np.ndarray):
     return np.stack([audio, audio], axis=1).astype(np.float32)
+
+def resample_audio(audio: np.ndarray, source_rate: int):
+    if int(source_rate) == SAMPLE_RATE:
+        return audio.astype(np.float32)
+    duration = len(audio) / float(source_rate)
+    if duration <= 0:
+        return np.zeros(int(SAMPLE_RATE * 0.25), dtype=np.float32)
+    old_x = np.linspace(0.0, duration, num=len(audio), endpoint=False)
+    new_len = max(1, int(round(duration * SAMPLE_RATE)))
+    new_x = np.linspace(0.0, duration, num=new_len, endpoint=False)
+    return np.interp(new_x, old_x, audio).astype(np.float32)
+
+def engine_for(config: dict):
+    value = str(config.get('ttsEngine') or os.environ.get('DEEPCAST_TTS_ENGINE') or 'chatterbox-nano').strip().lower()
+    return value if value in {'chatterbox-nano','chatterbox-turbo','kokoro'} else 'chatterbox-nano'
 
 
 def parse_dialogue(script: str, host1: dict, host2: dict):
@@ -113,25 +129,39 @@ def synthesize(payload_json: str) -> str:
     pieces = []
     spatial = str(payload.get("audioOutput") or "Spatial Stereo").lower().startswith("spatial")
     turn_gap = np.zeros((int(SAMPLE_RATE * 0.18), 2), dtype=np.float32)
-    for who, text in turns:
-        config = host1 if who.lower() == str(host1.get("name") or "Jiro").lower() else host2
-        voice = voice1 if config is host1 else voice2
-        mono = synth_text(text, voice, config.get("pace") or "Medium")
-        if spatial:
-            turn = stereo_turn(mono, -0.16 if config is host1 else 0.16)
-        else:
-            turn = standard_stereo(mono)
-        pieces.append(turn)
-        pieces.append(turn_gap)
-    audio = np.concatenate(pieces, axis=0) if pieces else turn_gap
+    secret = str(payload.get("sharedSecret") or SHARED_SECRET)
     with tempfile.TemporaryDirectory() as td:
-        wav = Path(td) / "segment.wav"
-        mp3 = Path(td) / "segment.mp3"
+        td_path = Path(td)
+        references = {}
+        for slot, config in (("host1", host1), ("host2", host2)):
+            engine = engine_for(config)
+            if engine.startswith("chatterbox"):
+                source = td_path / f"{slot}-reference-source"
+                wav_ref = td_path / f"{slot}-reference.wav"
+                download_reference(str(config.get("voiceReferenceUrl") or ""), secret, source)
+                subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-ac", "1", "-ar", str(SAMPLE_RATE), "-t", "20", str(wav_ref)], check=True)
+                references[slot] = wav_ref
+        for who, turn_text in turns:
+            is_host1 = who.lower() == str(host1.get("name") or "Jiro").lower()
+            config = host1 if is_host1 else host2
+            slot = "host1" if is_host1 else "host2"
+            engine = engine_for(config)
+            if engine.startswith("chatterbox"):
+                mono, rate = synthesize_chatterbox(turn_text, engine, references[slot])
+                mono = resample_audio(mono, rate)
+            else:
+                voice = voice1 if is_host1 else voice2
+                mono = synth_text(turn_text, voice, config.get("pace") or "Medium")
+            turn = stereo_turn(mono, -0.16 if is_host1 else 0.16) if spatial else standard_stereo(mono)
+            pieces.append(turn)
+            pieces.append(turn_gap)
+        audio = np.concatenate(pieces, axis=0) if pieces else turn_gap
+        wav = td_path / "segment.wav"
+        mp3 = td_path / "segment.mp3"
         sf.write(wav, audio, SAMPLE_RATE, subtype="PCM_16")
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav), "-ar", "44100", "-b:a", "128k", str(mp3)], check=True)
         upload(mp3, payload["callbackUrl"])
-    return json.dumps({"ok": True, "segmentIndex": payload.get("segmentIndex"), "voices": [voice1, voice2]})
-
+    return json.dumps({"ok": True, "segmentIndex": payload.get("segmentIndex"), "engines": [engine_for(host1), engine_for(host2)]})
 
 def mix(payload_json: str) -> str:
     payload = json.loads(payload_json)
@@ -188,8 +218,8 @@ def preview(payload_json: str) -> str:
     return json.dumps({"ok": True, "mimeType": "audio/mpeg", "audio": encoded, "voice": voice})
 
 
-with gr.Blocks(title="DeepCast Kokoro + FFmpeg Worker") as app:
-    gr.Markdown("# DeepCast Kokoro + FFmpeg Worker\nPrivate API worker for DeepCast Studio.")
+with gr.Blocks(title="DeepCast Chatterbox + Kokoro + FFmpeg Worker") as app:
+    gr.Markdown("# DeepCast Chatterbox + Kokoro + FFmpeg Worker\nPrivate API worker for DeepCast Studio.")
     gr.api(synthesize, api_name="synthesize")
     gr.api(mix, api_name="mix")
     gr.api(preview, api_name="preview")

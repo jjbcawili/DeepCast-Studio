@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { KOKORO_VOICES } from '../data/kokoroVoices';
 import { api } from '../lib/api';
@@ -6,12 +6,23 @@ import { getProjects, makeId, upsertEpisode, patchEpisode } from '../lib/storage
 import { useAuth } from '../auth/AuthContext';
 import type { EpisodeRecord, HostConfig } from '../types';
 
-const defaultJiro: HostConfig = { name:'Jiro', voice:'am_michael', profile:'A warm, witty, organized male host who keeps the timeline, release details, source evidence, and source boundaries clear.', style:'Conversational', pace:'Medium', accent:'Neutral', banter:80, directorsNote:'' };
-const defaultSharpay: HostConfig = { name:'Sharpay', voice:'af_heart', profile:'A theatrical, expressive female host with playful main-character energy who adds texture, drama, humor, and sharp interpretation without sacrificing accuracy.', style:'Expressive', pace:'Medium', accent:'Neutral', banter:85, directorsNote:'' };
+const defaultJiro: HostConfig = { name:'Jiro', voice:'am_michael', profile:'A warm, witty, organized male host who keeps the timeline, release details, source evidence, and source boundaries clear.', style:'Conversational', pace:'Medium', accent:'Neutral', banter:80, directorsNote:'', ttsEngine:'chatterbox-nano' };
+const defaultSharpay: HostConfig = { name:'Sharpay', voice:'af_heart', profile:'A theatrical, expressive female host with playful main-character energy who adds texture, drama, humor, and sharp interpretation without sacrificing accuracy.', style:'Expressive', pace:'Medium', accent:'Neutral', banter:85, directorsNote:'', ttsEngine:'chatterbox-nano' };
+
+function loadHostConfig(key:string, fallback:HostConfig):HostConfig {
+  try { const raw=localStorage.getItem(key); return raw ? {...fallback,...JSON.parse(raw)} : fallback; } catch { return fallback; }
+}
 
 function HostEditor({ label, host, setHost }: { label:string; host:HostConfig; setHost:(h:HostConfig)=>void }) {
   const [q,setQ] = useState('');
+  const [uploading,setUploading] = useState(false);
   const voices = KOKORO_VOICES.filter(v => v.join(' ').toLowerCase().includes(q.toLowerCase()));
+  const cloneEngine = (host.ttsEngine || 'chatterbox-nano') !== 'kokoro';
+  async function uploadReference(file?:File) {
+    if(!file)return; setUploading(true);
+    try { const saved=await api.uploadVoiceReference(host.name,file); setHost({...host,voiceReferenceKey:saved.voiceReferenceKey,voiceReferenceName:saved.fileName,ttsEngine:host.ttsEngine || 'chatterbox-nano'}); }
+    finally { setUploading(false); }
+  }
   async function preview(voice: string) {
     try {
       const d = await api.previewVoice({ hostName:host.name, voice, style:host.style, pace:host.pace, accent:host.accent });
@@ -30,8 +41,12 @@ function HostEditor({ label, host, setHost }: { label:string; host:HostConfig; s
       <label>Pace<select value={host.pace} onChange={e=>setHost({...host,pace:e.target.value})}><option>Slow</option><option>Medium</option><option>Fast</option></select></label>
       <label>Accent<select value={host.accent} onChange={e=>setHost({...host,accent:e.target.value})}><option>Neutral</option><option>American</option><option>British</option><option>Filipino English</option></select></label>
     </div>
-    <div className="voice-picker"><div className="voice-picker-head"><b>Voice</b><span>Kokoro stock voices</span></div><p>Selected: <b>{host.voice}</b></p><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search voices"/>
-      <div className="voice-list">{voices.map(([name,tone,accent])=><div className={`voice-row ${host.voice===name?'selected':''}`} key={name}><button type="button" className="voice-choice" onClick={()=>setHost({...host,voice:name})}><b>{name}</b><small>{tone} · {accent}</small></button><button type="button" className="tiny-button" onClick={()=>preview(name)}>▶ PREVIEW</button></div>)}</div>
+    <div className="voice-picker"><div className="voice-picker-head"><b>TTS Engine</b><span>{cloneEngine?'Voice cloning':'Legacy stock voice'}</span></div>
+      <label>Engine<select value={host.ttsEngine || 'chatterbox-nano'} onChange={e=>setHost({...host,ttsEngine:e.target.value as HostConfig['ttsEngine']})}><option value="chatterbox-nano">Chatterbox Nano · CPU clone</option><option value="chatterbox-turbo">Chatterbox Turbo · quality clone</option><option value="kokoro">Kokoro · legacy fallback</option></select></label>
+      {cloneEngine ? <div className="source-box"><b>VOICE REFERENCE</b><p className="helper">Use a clean 5–20 second clip with one speaker, no music, and minimal room echo. It is stored privately in DeepCast R2, not committed to GitHub.</p><input type="file" accept="audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,.wav,.mp3,.m4a" onChange={e=>uploadReference(e.target.files?.[0])} disabled={uploading}/><p className="helper">{uploading?'Uploading reference…':host.voiceReferenceName?`Saved: ${host.voiceReferenceName}`:'Reference required before generation.'}</p></div> : <>
+        <p>Selected: <b>{host.voice}</b></p><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search voices"/>
+        <div className="voice-list">{voices.map(([name,tone,accent])=><div className={`voice-row ${host.voice===name?'selected':''}`} key={name}><button type="button" className="voice-choice" onClick={()=>setHost({...host,voice:name})}><b>{name}</b><small>{tone} · {accent}</small></button><button type="button" className="tiny-button" onClick={()=>preview(name)}>▶ PREVIEW</button></div>)}</div>
+      </>}
     </div>
   </div>;
 }
@@ -52,8 +67,8 @@ export function StudioPage(){
   const [selectedSources,setSelectedSources]=useState<string[]>([]);
   const [pasted,setPasted]=useState('');
   const [webSearch,setWebSearch]=useState(false);
-  const [jiro,setJiro]=useState(defaultJiro);
-  const [sharpay,setSharpay]=useState(defaultSharpay);
+  const [jiro,setJiro]=useState(()=>loadHostConfig('deepcast:host:jiro',defaultJiro));
+  const [sharpay,setSharpay]=useState(()=>loadHostConfig('deepcast:host:sharpay',defaultSharpay));
   const [producer,setProducer]=useState('');
   const [musicMode,setMusicMode]=useState('none');
   const [coverMode,setCoverMode]=useState('none');
@@ -61,6 +76,9 @@ export function StudioPage(){
   const [audioOutput,setAudioOutput]=useState('Spatial Stereo');
   const [submitting,setSubmitting]=useState(false);
   const [formError,setFormError]=useState('');
+
+  useEffect(()=>{ try{localStorage.setItem('deepcast:host:jiro',JSON.stringify(jiro));}catch{} },[jiro]);
+  useEffect(()=>{ try{localStorage.setItem('deepcast:host:sharpay',JSON.stringify(sharpay));}catch{} },[sharpay]);
 
   const sourceText=useMemo(()=>{
     const chosen=project?.sources.filter(s=>selectedSources.includes(s.id)).map(s=>`SOURCE: ${s.title}\n${s.content||s.url||''}`)||[];
@@ -70,11 +88,12 @@ export function StudioPage(){
 
   function toggleSource(id:string){setSelectedSources(v=>v.includes(id)?v.filter(x=>x!==id):[...v,id]);}
   function clearStudio(){
-    setTitle(''); setPrompt(''); setGuidance(''); setMode('guided'); setVerified(true); setFormat('Deep Dive'); setRuntime('45'); setProjectId(''); setSelectedSources([]); setPasted(''); setWebSearch(false); setJiro(defaultJiro); setSharpay(defaultSharpay); setProducer(''); setMusicMode('none'); setCoverMode('none'); setDownloadFormat('MP3'); setAudioOutput('Spatial Stereo'); setFormError('');
+    setTitle(''); setPrompt(''); setGuidance(''); setMode('guided'); setVerified(true); setFormat('Deep Dive'); setRuntime('45'); setProjectId(''); setSelectedSources([]); setPasted(''); setWebSearch(false); setProducer(''); setMusicMode('none'); setCoverMode('none'); setDownloadFormat('MP3'); setAudioOutput('Spatial Stereo'); setFormError('');
   }
 
   async function generate(){
     if(!prompt.trim()&&!guidance.trim()){setFormError('Add a prompt/focus or script guidance first.'); return;}
+    for (const [label,host] of [['Jiro',jiro],['Sharpay',sharpay]] as const) { if((host.ttsEngine || 'chatterbox-nano') !== 'kokoro' && !host.voiceReferenceKey){setFormError(`Upload a clean voice reference for ${label} before using Chatterbox.`); return;} }
     if(submitting)return;
     setSubmitting(true); setFormError('');
     const now=new Date().toISOString();
@@ -132,7 +151,7 @@ export function StudioPage(){
       <label className="toggle"><input type="checkbox" checked={webSearch} onChange={e=>setWebSearch(e.target.checked)}/><small>Enable web research for this episode when the background backend supports it</small></label>
     </section>
 
-    <section className="studio-section"><h2>SPEAKER SETTINGS</h2><p className="helper">Kokoro is the no-per-generation-cost stock-voice path. Jiro and Sharpay remain separately cast and editable; XTTS/Fish Speech can be added later for authorized custom-voice cloning.</p><div className="host-grid"><HostEditor label="HOST 1" host={jiro} setHost={setJiro}/><HostEditor label="HOST 2" host={sharpay} setHost={setSharpay}/></div></section>
+    <section className="studio-section"><h2>SPEAKER SETTINGS</h2><p className="helper">Chatterbox Nano is the default no-per-character-cost cloning path. Turbo is the higher-quality clone option. Kokoro remains available only as a legacy fallback.</p><div className="host-grid"><HostEditor label="HOST 1" host={jiro} setHost={setJiro}/><HostEditor label="HOST 2" host={sharpay} setHost={setSharpay}/></div></section>
 
     <section className="studio-section"><h2>PRODUCTION</h2><label>Producer Instructions<textarea value={producer} onChange={e=>setProducer(e.target.value)} placeholder="Tone, pacing, transitions, fact discipline, banter, segment priorities…"/></label>
       <div className="two-col-form"><label>Background Music<select value={musicMode} onChange={e=>setMusicMode(e.target.value)}><option value="none">None</option><option value="subtle" disabled>Subtle bed + ducking — deploy audio-bed lane first</option><option value="cinematic" disabled>Cinematic bed + ducking — deploy audio-bed lane first</option></select></label><label>Cover Art<select value={coverMode} onChange={e=>setCoverMode(e.target.value)}><option value="none">None</option><option value="auto" disabled>Auto — cover generator not deployed yet</option><option value="project" disabled>Use project art — R2 cover sync not deployed yet</option></select></label></div>

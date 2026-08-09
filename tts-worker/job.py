@@ -40,7 +40,7 @@ def main():
         status(backend, args.episode, secret, {
             "status": "SYNTHESIZING",
             "progress": 60,
-            "message": f"GitHub Actions is synthesizing audio segment {args.part}."
+            "message": f"GitHub Actions is synthesizing cloned/stock audio segment {args.part}."
         })
     else:
         status(backend, args.episode, secret, {
@@ -65,7 +65,7 @@ def main():
         status(backend, args.episode, secret, {
             "status": "FAILED",
             "progress": 92 if args.api_name == "mix" else 60,
-            "message": "The Kokoro/FFmpeg runner failed. Completed segments were preserved.",
+            "message": "The TTS/FFmpeg runner failed. Completed segments were preserved.",
             "error": str(exc)[:1500],
             "failedStage": stage,
         })

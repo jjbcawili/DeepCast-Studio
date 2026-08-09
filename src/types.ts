@@ -71,6 +71,9 @@ export type HostConfig = {
   accent: string;
   banter: number;
   directorsNote: string;
+  ttsEngine?: 'chatterbox-nano' | 'chatterbox-turbo' | 'kokoro';
+  voiceReferenceKey?: string;
+  voiceReferenceName?: string;
 };
 
 export type EpisodeSubmitPayload = {

@@ -34,7 +34,7 @@ async function startServer(){
     backendConfigured:!!BACKEND,
     chatgptSignInSupported:!!CHATGPT_SIGN_IN_URL,
     chatgptSignInUrl:CHATGPT_SIGN_IN_URL ? '/api/auth/chatgpt/start' : null,
-    generationArchitecture:'episode-shell + Cloudflare Queues + Workers AI/Groq + hosted Kokoro/FFmpeg worker + D1/R2',
+    generationArchitecture:'episode-shell + Cloudflare Queues + Workers AI/Groq + Chatterbox/Kokoro on GitHub Actions + D1/R2',
   }));
   app.get('/api/auth/chatgpt/start',(_req,res)=>{
     if(!CHATGPT_SIGN_IN_URL)return res.status(501).json({error:'Sign in with ChatGPT is not enabled by this Sites runtime.'});
@@ -45,6 +45,7 @@ async function startServer(){
   app.post('/api/episodes/:id/retry',(req,res)=>proxy(req,res,`/api/episodes/${encodeURIComponent(req.params.id)}/retry`));
   app.post('/api/episodes/:id/cancel',(req,res)=>proxy(req,res,`/api/episodes/${encodeURIComponent(req.params.id)}/cancel`));
   app.post('/api/episodes/:id/audio',(req,res)=>proxy(req,res,`/api/episodes/${encodeURIComponent(req.params.id)}/audio`));
+  app.post('/api/voice-references',(req,res)=>proxy(req,res,'/api/voice-references'));
   app.post('/api/preview-voice',(req,res)=>proxy(req,res,'/api/preview-voice'));
   app.post('/api/chat',(req,res)=>proxy(req,res,'/api/chat'));
 

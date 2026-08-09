@@ -104,6 +104,20 @@ async function gradioCall(env:Env,apiName:string,payload:any){
   const text=await result.text(); const blocks=text.split('\n\n'); let final:any=null; for(const block of blocks){const ev=block.match(/^event:\s*(.+)$/m)?.[1];const data=block.match(/^data:\s*(.+)$/m)?.[1];if(ev==='error')throw new Error(data||'Kokoro worker failed.');if(ev==='complete'&&data){try{final=JSON.parse(data)}catch{final=data;}}} return final;
 }
 
+function decodeBase64Audio(value:string){
+  const clean=String(value||'').replace(/^data:[^,]+,/,'').replace(/\s+/g,'');
+  if(!clean)throw new Error('VOICE_REFERENCE_EMPTY');
+  if(clean.length>12_000_000)throw new Error('VOICE_REFERENCE_TOO_LARGE');
+  const raw=atob(clean);const bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);return bytes;
+}
+function voiceExt(mime:string){const m=String(mime||'').toLowerCase();if(m.includes('mpeg'))return 'mp3';if(m.includes('mp4')||m.includes('m4a'))return 'm4a';return 'wav';}
+async function hostWithVoiceReference(env:Env,userId:string,host:any){
+  const copy={...(host||{})};const key=String(copy.voiceReferenceKey||'').trim();if(!key)return copy;
+  const head:any=await env.AUDIO.head(key);if(!head||String(head.customMetadata?.userId||'')!==String(userId))throw new Error('VOICE_REFERENCE_NOT_FOUND');
+  copy.voiceReferenceUrl=`${env.PUBLIC_BASE_URL}/internal/voice-reference?key=${encodeURIComponent(key)}`;return copy;
+}
+function ttsLabel(request:any){const names=[request?.host1?.ttsEngine,request?.host2?.ttsEngine].map((v:any)=>String(v||'chatterbox-nano')).filter(Boolean);return [...new Set(names)].join(' + ');}
+
 async function processJob(job:QueueJob,env:Env){
   const row=await getEpisodeRow(env,job.episodeId); if(!row||row.status==='CANCELLED'||row.status==='COMPLETE'||row.status==='FAILED')return;
   const request=JSON.parse(row.request_json||'{}');
@@ -134,7 +148,7 @@ async function processJob(job:QueueJob,env:Env){
       if(Number(ready.n)===Number(row.expected_segments)){
         const all=(await env.DB.prepare('SELECT script FROM episode_segments WHERE episode_id=? ORDER BY segment_index').bind(row.id).all()).results||[];
         const full=all.map((s:any)=>s.script).join('\n\n');
-        const transition:any=await env.DB.prepare(`UPDATE episodes SET status='AUDIO_QUEUED',progress=58,progress_message=?,script=?,engine=?,audio_queued=1,error=NULL,failed_stage=NULL,updated_at=? WHERE id=? AND audio_queued=0 AND status NOT IN ('CANCELLED','COMPLETE')`).bind('Script complete. Audio segments are queued for Kokoro on a background compute runner.',full,'Workers AI / Groq → Kokoro → FFmpeg',now(),row.id).run();
+        const transition:any=await env.DB.prepare(`UPDATE episodes SET status='AUDIO_QUEUED',progress=58,progress_message=?,script=?,engine=?,audio_queued=1,error=NULL,failed_stage=NULL,updated_at=? WHERE id=? AND audio_queued=0 AND status NOT IN ('CANCELLED','COMPLETE')`).bind('Script complete. Audio segments are queued for the selected TTS engine on a background compute runner.',full,`Workers AI / Groq → ${ttsLabel(request)} → FFmpeg`,now(),row.id).run();
         if(Number(transition?.meta?.changes||0)>0){
           await event(env,row.id,'AUDIO_QUEUED','Script complete. Audio generation moved to the background queue.');
           for(let x=0;x<Number(row.expected_segments);x++)await env.EPISODE_QUEUE.send({kind:'audio_segment',episodeId:row.id,segmentIndex:x});
@@ -146,7 +160,7 @@ async function processJob(job:QueueJob,env:Env){
   if(job.kind==='audio_segment'){
     const i=Number(job.segmentIndex);const seg=await env.DB.prepare('SELECT * FROM episode_segments WHERE episode_id=? AND segment_index=?').bind(row.id,i).first();if(!seg?.script||seg.audio_key)return;
     try{
-      await setEpisode(env,row.id,'SYNTHESIZING',Math.max(60,row.progress),`Dispatching audio segment ${i+1} of ${row.expected_segments} to the Kokoro compute runner.`);
+      await setEpisode(env,row.id,'SYNTHESIZING',Math.max(60,row.progress),`Dispatching audio segment ${i+1} of ${row.expected_segments} to the TTS compute runner.`);
       if(env.GITHUB_ACTIONS_TOKEN&&env.GITHUB_REPO) await dispatchGitHubAudio(env,'synthesize',row.id,i);
       else await gradioCall(env,'synthesize',{
         sharedSecret:env.TTS_SHARED_SECRET,episodeId:row.id,segmentIndex:i,script:seg.script,host1:request.host1||{},host2:request.host2||{},audioOutput:request.audioOutput||'Spatial Stereo',callbackUrl:`${env.PUBLIC_BASE_URL}/internal/audio/${row.id}/${i}?kind=segment&ext=mp3`
@@ -171,7 +185,15 @@ async function processJob(job:QueueJob,env:Env){
 async function handle(req:Request,env:Env){
   const url=new URL(req.url); const cors=originHeaders(req); if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors});
   try{
-    if(url.pathname==='/api/health')return reply({ok:true,architecture:'durable episode shell + queue + D1/R2',audioRunner:env.GITHUB_ACTIONS_TOKEN&&env.GITHUB_REPO?'github-actions':env.KOKORO_SPACE_URL?'hosted-gradio':'unconfigured'},200,cors);
+    if(url.pathname==='/api/health')return reply({ok:true,architecture:'durable episode shell + queue + D1/R2',audioRunner:env.GITHUB_ACTIONS_TOKEN&&env.GITHUB_REPO?'github-actions':env.KOKORO_SPACE_URL?'hosted-gradio':'unconfigured',ttsEngines:['chatterbox-nano','chatterbox-turbo','kokoro'],voiceCloning:'private-r2-reference-audio'},200,cors);
+    if(url.pathname==='/api/voice-references'&&req.method==='POST'){
+      const u=await requestUser(req,env);const b:any=await req.json();const mime=String(b.mimeType||'audio/wav').toLowerCase();
+      if(!['audio/wav','audio/x-wav','audio/mpeg','audio/mp3','audio/mp4','audio/x-m4a'].includes(mime))return reply({error:'Use WAV, MP3, or M4A for a voice reference.'},415,cors);
+      const bytes=decodeBase64Audio(String(b.audioBase64||''));if(bytes.byteLength>8*1024*1024)return reply({error:'Voice reference must be 8 MB or smaller.'},413,cors);
+      const key=`voice-references/${u.uid}/${id('voice')}.${voiceExt(mime)}`;const fileName=String(b.fileName||`voice-reference.${voiceExt(mime)}`).slice(0,180);const hostName=String(b.hostName||'Host').slice(0,80);
+      await env.AUDIO.put(key,bytes,{httpMetadata:{contentType:mime},customMetadata:{userId:u.uid,hostName,fileName}});
+      return reply({voiceReferenceKey:key,fileName,mimeType:mime,size:bytes.byteLength},201,cors);
+    }
     if(url.pathname==='/api/episodes'&&req.method==='POST'){
       const u=await requestUser(req,env); const since=new Date(Date.now()-86400000).toISOString();const count:any=await env.DB.prepare('SELECT COUNT(*) n FROM episodes WHERE user_id=? AND created_at>=?').bind(u.uid,since).first();const cap=Math.max(1,Number(env.MAX_DAILY_EPISODES||3));if(Number(count?.n||0)>=cap)return reply({error:`Daily safety cap reached (${cap} episodes). This prevents runaway free-tier usage.`},429,cors);
       const b:any=await req.json();if(!String(b.prompt||'').trim()&&!String(b.scriptGuidance||'').trim())return reply({error:'Prompt or script guidance is required.'},400,cors);const episodeId=id('ep');const created=now();await env.DB.prepare(`INSERT INTO episodes(id,user_id,local_episode_id,title,prompt,project_id,format,runtime,request_json,status,progress,progress_message,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(episodeId,u.uid,b.localEpisodeId||null,b.episodeTitle||'Untitled Deep Dive',b.prompt||b.scriptGuidance,b.projectId||null,b.format||'Deep Dive',b.runtime||'45',JSON.stringify(b),'QUEUED',5,'Episode accepted. Waiting for the background script queue.',created,created).run();await event(env,episodeId,'QUEUED','Episode accepted by the background queue.');await env.EPISODE_QUEUE.send({kind:'plan',episodeId});return reply({episode:await episodeJson(env,await getEpisodeRow(env,episodeId))},202,cors);
@@ -211,7 +233,8 @@ async function handle(req:Request,env:Env){
         return reply({episodeId,segmentUrls:segs.map((s:any)=>`${env.PUBLIC_BASE_URL}/internal/audio-object?key=${encodeURIComponent(s.audio_key)}`),downloadFormat:finalExt,audioOutput:request.audioOutput||'Spatial Stereo',musicMode:request.musicMode||'none',callbackUrl:`${env.PUBLIC_BASE_URL}/internal/audio/${episodeId}/final?kind=final&ext=${finalExt}`},200,cors);
       }
       const i=Number(part);const seg=await env.DB.prepare('SELECT * FROM episode_segments WHERE episode_id=? AND segment_index=?').bind(episodeId,i).first();if(!seg?.script)return reply({error:'Script segment not ready'},409,cors);
-      return reply({episodeId,segmentIndex:i,script:seg.script,host1:request.host1||{},host2:request.host2||{},audioOutput:request.audioOutput||'Spatial Stereo',callbackUrl:`${env.PUBLIC_BASE_URL}/internal/audio/${episodeId}/${i}?kind=segment&ext=mp3`},200,cors);
+      const host1=await hostWithVoiceReference(env,row.user_id,request.host1||{});const host2=await hostWithVoiceReference(env,row.user_id,request.host2||{});
+      return reply({episodeId,segmentIndex:i,script:seg.script,host1,host2,audioOutput:request.audioOutput||'Spatial Stereo',callbackUrl:`${env.PUBLIC_BASE_URL}/internal/audio/${episodeId}/${i}?kind=segment&ext=mp3`},200,cors);
     }
     const statusUpdate=url.pathname.match(/^\/internal\/audio-status\/([^/]+)$/);if(statusUpdate&&req.method==='POST'){
       if(!env.TTS_SHARED_SECRET||req.headers.get('authorization')!==`Bearer ${env.TTS_SHARED_SECRET}`)return new Response('Forbidden',{status:403});
@@ -230,7 +253,7 @@ async function handle(req:Request,env:Env){
       if(kind==='final'){
         const existing=await env.DB.prepare('SELECT id FROM episode_assets WHERE episode_id=? AND kind=? LIMIT 1').bind(episodeId,ext).first();
         if(!existing){const token=crypto.randomUUID()+crypto.randomUUID();await env.DB.prepare('INSERT INTO episode_assets(id,episode_id,kind,r2_key,label,access_token,created_at) VALUES(?,?,?,?,?,?,?)').bind(id('asset'),episodeId,ext,key,'Finished DeepCast episode',token,now()).run();}
-        await setEpisode(env,episodeId,'COMPLETE',100,'Episode generation complete. Audio is ready to play and download.',{engine:'Workers AI / Groq → Kokoro → FFmpeg',retryable:0});
+        await setEpisode(env,episodeId,'COMPLETE',100,'Episode generation complete. Audio is ready to play and download.',{engine:`Workers AI / Groq → ${ttsLabel(request)} → FFmpeg`,retryable:0});
       }else{
         await env.DB.prepare('UPDATE episode_segments SET audio_key=?,status=?,error=NULL,updated_at=? WHERE episode_id=? AND segment_index=?').bind(key,'AUDIO_READY',now(),episodeId,Number(part)).run();
         const row=await getEpisodeRow(env,episodeId);const done:any=await env.DB.prepare('SELECT COUNT(*) n FROM episode_segments WHERE episode_id=? AND audio_key IS NOT NULL').bind(episodeId).first();
@@ -242,6 +265,7 @@ async function handle(req:Request,env:Env){
       }
       return reply({ok:true,key},200,cors);
     }
+    if(url.pathname==='/internal/voice-reference'&&req.method==='GET'){if(!env.TTS_SHARED_SECRET||req.headers.get('authorization')!==`Bearer ${env.TTS_SHARED_SECRET}`)return new Response('Forbidden',{status:403});const key=url.searchParams.get('key');if(!key)return new Response('Missing key',{status:400});const obj:any=await env.AUDIO.get(key);if(!obj)return new Response('Not found',{status:404});const h=new Headers();h.set('Content-Type',String(obj.httpMetadata?.contentType||'application/octet-stream'));h.set('Cache-Control','private, no-store');return new Response(obj.body,{headers:h});}
     if(url.pathname==='/internal/audio-object'&&req.method==='GET'){if(!env.TTS_SHARED_SECRET||req.headers.get('authorization')!==`Bearer ${env.TTS_SHARED_SECRET}`)return new Response('Forbidden',{status:403});const key=url.searchParams.get('key');if(!key)return new Response('Missing key',{status:400});const obj=await env.AUDIO.get(key);return obj?new Response(obj.body,{headers:{'Content-Type':'audio/mpeg'}}):new Response('Not found',{status:404});}
     if(url.pathname==='/api/preview-voice'&&req.method==='POST'){await requestUser(req,env);const b:any=await req.json();if(!env.KOKORO_SPACE_URL)return reply({error:'Hosted Kokoro worker is not configured.'},503,cors);const raw:any=await gradioCall(env,'preview',{sharedSecret:env.TTS_SHARED_SECRET,voice:b.voice||'af_heart',pace:b.pace||'Medium',text:`${b.hostName||'Host'}: Welcome to DeepCast Studio. Let’s build something worth listening to.`});let value:any=Array.isArray(raw)?raw[0]:raw;if(typeof value==='string'){try{value=JSON.parse(value)}catch{}}return reply(value||{error:'Preview worker returned no audio.'},value?.audio?200:502,cors);}
     if(url.pathname==='/api/chat'&&req.method==='POST'){await requestUser(req,env);const b:any=await req.json();let text='';if(b.webSearch&&env.GROQ_API_KEY){try{text=await researchWeb(env,`Answer this DeepCast Studio chat question using current web results when useful. Include source names and URLs: ${String(b.message||'').slice(0,12000)}`);}catch{}}if(!text)text=await generateText(env,`Act as DeepCast Studio Chat. User: ${String(b.message||'').slice(0,12000)}`);return reply({text},200,cors);}
