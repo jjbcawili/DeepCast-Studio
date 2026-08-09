@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       api_name:
-        description: Kokoro action to run
+        description: DeepCast audio action to run
         required: true
         type: choice
         options: [synthesize, mix]
@@ -36,16 +36,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
           cache: pip
           cache-dependency-path: tts-worker/requirements.txt
+      - name: Cache Hugging Face model downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: deepcast-chatterbox-0.1.7-${{ runner.os }}
       - name: Install FFmpeg and eSpeak NG
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng
-      - name: Install Kokoro worker dependencies
+      - name: Install DeepCast TTS worker dependencies
         run: python -m pip install --disable-pip-version-check -r tts-worker/requirements.txt
-      - name: Run Kokoro / FFmpeg job
+      - name: Run Chatterbox / Kokoro / FFmpeg job
         env:
           DEEPCAST_CALLBACK_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
           TTS_SHARED_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
