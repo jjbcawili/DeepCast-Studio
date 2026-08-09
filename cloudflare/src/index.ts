@@ -52,6 +52,23 @@ async function episodeJson(env:Env,row:any){
 }
 async function assertOwner(req:Request,env:Env,episodeId:string){const u=await requestUser(req,env);const row=await getEpisodeRow(env,episodeId);if(!row)throw new Error('NOT_FOUND');if(row.user_id!==u.uid)throw new Error('FORBIDDEN');return {u,row};}
 
+async function ensureEpisodeMetadata(env:Env,row:any){
+  const request=JSON.parse(row.request_json||'{}');
+  if(String(row.title||'').trim()!=='Untitled Deep Dive'&&String(request.generatedSummary||'').trim())return row;
+  try{
+    const raw=await generateText(env,`Return one JSON object only with a polished podcast title (max 12 words) and a concise 2-3 sentence summary. Describe the episode itself, never the production instructions. Topic: ${row.prompt}. Script excerpt: ${String(row.script||'').slice(0,6000)}`);
+    const metadata=JSON.parse(cleanJson(raw));
+    const title=String(metadata?.title||'').trim().slice(0,140);
+    const summary=String(metadata?.summary||'').trim().slice(0,1200);
+    if(title||summary){
+      const nextRequest={...request,generatedSummary:summary||request.generatedSummary||row.prompt};
+      await env.DB.prepare('UPDATE episodes SET title=?,request_json=?,updated_at=? WHERE id=?').bind(title||row.title,JSON.stringify(nextRequest),now(),row.id).run();
+      return await getEpisodeRow(env,row.id);
+    }
+  }catch{}
+  return row;
+}
+
 async function generateText(env:Env,prompt:string){
   try{
     const out:any=await env.AI.run(env.SCRIPT_MODEL||'@cf/qwen/qwen3-30b-a3b-fp8',{messages:[{role:'system',content:'You are DeepCast Studio. Follow source discipline, preserve host identities, do not quote copyrighted song lyrics, and return only the requested output.'},{role:'user',content:prompt}],max_tokens:4096,temperature:0.65});
@@ -159,7 +176,7 @@ async function handle(req:Request,env:Env){
       const u=await requestUser(req,env); const since=new Date(Date.now()-86400000).toISOString();const count:any=await env.DB.prepare('SELECT COUNT(*) n FROM episodes WHERE user_id=? AND created_at>=?').bind(u.uid,since).first();const cap=Math.max(1,Number(env.MAX_DAILY_EPISODES||3));if(Number(count?.n||0)>=cap)return reply({error:`Daily safety cap reached (${cap} episodes). This prevents runaway free-tier usage.`},429,cors);
       const b:any=await req.json();if(!String(b.prompt||'').trim()&&!String(b.scriptGuidance||'').trim())return reply({error:'Prompt or script guidance is required.'},400,cors);const episodeId=id('ep');const created=now();await env.DB.prepare(`INSERT INTO episodes(id,user_id,local_episode_id,title,prompt,project_id,format,runtime,request_json,status,progress,progress_message,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(episodeId,u.uid,b.localEpisodeId||null,b.episodeTitle||'Untitled Deep Dive',b.prompt||b.scriptGuidance,b.projectId||null,b.format||'Deep Dive',b.runtime||'45',JSON.stringify(b),'QUEUED',5,'Episode accepted. Waiting for the background script queue.',created,created).run();await event(env,episodeId,'QUEUED','Episode accepted by the background queue.');await env.EPISODE_QUEUE.send({kind:'plan',episodeId});return reply({episode:await episodeJson(env,await getEpisodeRow(env,episodeId))},202,cors);
     }
-    const m=url.pathname.match(/^\/api\/episodes\/([^/]+)$/);if(m&&req.method==='GET'){const {row}=await assertOwner(req,env,m[1]);return reply({episode:await episodeJson(env,row)},200,cors);}
+    const m=url.pathname.match(/^\/api\/episodes\/([^/]+)$/);if(m&&req.method==='GET'){const {row}=await assertOwner(req,env,m[1]);const hydrated=await ensureEpisodeMetadata(env,row);return reply({episode:await episodeJson(env,hydrated)},200,cors);}
     const retry=url.pathname.match(/^\/api\/episodes\/([^/]+)\/retry$/);if(retry&&req.method==='POST'){
       const {row}=await assertOwner(req,env,retry[1]);
       if(row.status!=='FAILED'||!row.retryable)return reply({error:'This episode is not retryable.'},409,cors);
