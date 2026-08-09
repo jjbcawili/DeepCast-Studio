@@ -22,6 +22,13 @@ jobs:
           python-version: '3.11'
           cache: pip
           cache-dependency-path: tts-worker/requirements.txt
+      - name: Cache Hugging Face model downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: deepcast-chatterbox-nano-5de7a54-${{ runner.os }}
+      - name: Install CPU-only PyTorch
+        run: python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 torchaudio==2.6.0
       - name: Install DeepCast TTS dependencies
         run: python -m pip install --disable-pip-version-check -r tts-worker/requirements.txt
       - name: Verify Chatterbox Nano and Turbo API surface
@@ -36,9 +43,17 @@ jobs:
           generator = inspect.signature(ChatterboxTurboTTS.generate)
           assert 'nano' in loader.parameters, f'Installed Chatterbox package does not expose nano= in from_pretrained: {loader}'
           assert 'audio_prompt_path' in generator.parameters, f'Installed Chatterbox package does not expose audio_prompt_path in generate: {generator}'
+          assert '+cpu' in torch.__version__ or torch.version.cuda is None, f'Expected CPU-only Torch, got {torch.__version__} CUDA={torch.version.cuda}'
           print('Chatterbox loader:', loader)
           print('Chatterbox generator:', generator)
-          print('Torch:', torch.__version__)
+          print('Torch:', torch.__version__, 'CUDA:', torch.version.cuda)
           print('Kokoro fallback import: OK')
-          print('DeepCast TTS dependency smoke test: PASS')
+          PY
+      - name: Load Chatterbox Nano on CPU
+        run: |
+          python - <<'PY'
+          from chatterbox.tts_turbo import ChatterboxTurboTTS
+          model = ChatterboxTurboTTS.from_pretrained(device='cpu', nano=True)
+          print('Nano CPU model loaded successfully; sample rate:', model.sr)
+          print('DeepCast TTS smoke test: PASS')
           PY
