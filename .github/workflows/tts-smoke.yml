@@ -27,6 +27,10 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: deepcast-chatterbox-nano-5de7a54-${{ runner.os }}
+      - name: Install eSpeak NG
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y espeak-ng
       - name: Install CPU-only PyTorch
         run: python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 torchaudio==2.6.0
       - name: Install DeepCast TTS dependencies
@@ -49,11 +53,20 @@ jobs:
           print('Torch:', torch.__version__, 'CUDA:', torch.version.cuda)
           print('Kokoro fallback import: OK')
           PY
-      - name: Load Chatterbox Nano on CPU
+      - name: Exercise Nano reference-conditioned synthesis on CPU
         run: |
+          espeak-ng -s 145 -w /tmp/deepcast-reference.wav 'This synthetic reference exists only to verify the DeepCast voice cloning pipeline on a standard CPU runner. It is not a Jiro or Sharpay voice sample.'
           python - <<'PY'
+          import soundfile as sf
           from chatterbox.tts_turbo import ChatterboxTurboTTS
+
           model = ChatterboxTurboTTS.from_pretrained(device='cpu', nano=True)
-          print('Nano CPU model loaded successfully; sample rate:', model.sr)
-          print('DeepCast TTS smoke test: PASS')
+          wav = model.generate('DeepCast reference conditioned voice synthesis is working.', audio_prompt_path='/tmp/deepcast-reference.wav')
+          audio = wav.detach().cpu().float().numpy()
+          if audio.ndim == 2:
+              audio = audio[0] if audio.shape[0] == 1 else audio.mean(axis=0)
+          assert audio.size > model.sr, f'Expected more than one second of generated audio, got {audio.size} samples at {model.sr} Hz'
+          sf.write('/tmp/deepcast-clone-smoke.wav', audio, model.sr)
+          print('Generated samples:', audio.size, 'sample rate:', model.sr)
+          print('Chatterbox Nano reference-conditioned CPU synthesis: PASS')
           PY
