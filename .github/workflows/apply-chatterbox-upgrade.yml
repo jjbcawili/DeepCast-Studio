@@ -1,0 +1,44 @@
+name: Apply Chatterbox Voice Upgrade
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-chatterbox-upgrade.yml'
+      - '.github/scripts/apply_chatterbox_upgrade.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deepcast-chatterbox-upgrade
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply repository migration
+        run: python .github/scripts/apply_chatterbox_upgrade.py
+      - name: Verify migration syntax
+        run: |
+          python -m py_compile tts-worker/app.py tts-worker/job.py tts-worker/chatterbox_engine.py
+          git diff --check
+      - name: Commit upgraded DeepCast stack
+        run: |
+          git config user.name 'DeepCast Automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/types.ts src/lib/api.ts src/pages/StudioPageV2.tsx server.ts tts-worker .github/workflows/deepcast-audio.yml .github/workflows/build.yml cloudflare/src/index.ts
+          if git diff --cached --quiet; then
+            echo 'No migration changes were needed.'
+            exit 0
+          fi
+          git commit -m 'Add Chatterbox voice cloning and private R2 references'
+          git push origin HEAD:main
