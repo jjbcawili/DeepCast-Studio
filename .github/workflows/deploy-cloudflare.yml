@@ -204,21 +204,28 @@ jobs:
           set -euo pipefail
           rm -f /tmp/deepcast-worker-secrets.json
           HEALTH=''
-          for attempt in 1 2 3 4 5 6; do
+          READY=0
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             if HEALTH="$(curl --fail --silent --show-error "${PUBLIC_BASE_URL}/api/health")"; then
-              break
+              if node -e '
+                const j=JSON.parse(process.argv[1]);
+                if(j.ok!==true) process.exit(2);
+                if(j.audioRunner!=="github-actions") process.exit(3);
+                if(!Array.isArray(j.ttsEngines)||!j.ttsEngines.includes("chatterbox-nano")||!j.ttsEngines.includes("chatterbox-turbo")||!j.ttsEngines.includes("kokoro")) process.exit(4);
+                if(j.voiceCloning!=="private-r2-reference-audio") process.exit(5);
+              ' "$HEALTH"; then
+                READY=1
+                break
+              fi
             fi
-            echo "Health check attempt $attempt failed; retrying shortly."
+            echo "Clone-aware health check attempt $attempt not ready yet; retrying after propagation."
             sleep 5
           done
           echo "$HEALTH"
-          node -e '
-            const j=JSON.parse(process.argv[1]);
-            if(j.ok!==true) throw new Error("Worker health check did not return ok=true");
-            if(j.audioRunner!=="github-actions") throw new Error(`Expected audioRunner=github-actions, got ${j.audioRunner}`);
-            if(!Array.isArray(j.ttsEngines)||!j.ttsEngines.includes("chatterbox-nano")||!j.ttsEngines.includes("chatterbox-turbo")||!j.ttsEngines.includes("kokoro")) throw new Error(`Unexpected TTS engines: ${JSON.stringify(j.ttsEngines)}`);
-            if(j.voiceCloning!=="private-r2-reference-audio") throw new Error(`Unexpected voiceCloning=${j.voiceCloning}`);
-          ' "$HEALTH"
+          if [ "$READY" -ne 1 ]; then
+            echo '::error::Deployed Worker never reported the Chatterbox/private-R2 capability set.'
+            exit 1
+          fi
 
       - name: Deployment summary
         if: success()
