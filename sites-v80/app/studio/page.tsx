@@ -746,7 +746,7 @@ export default function StudioPage() {
     try {
       let snapshot: BackgroundJobSnapshot | null = null;
       while (true) {
-        const response = await fetch(`/api/background/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
+        const response = await fetch(`/api/background/jobs/${encodeURIComponent(jobId)}?compact=1`, { cache: "no-store" });
         if (!response.ok) throw new Error(await getFailureMessage(response));
         snapshot = await response.json() as BackgroundJobSnapshot;
         const progress = Math.max(0, Math.min(100, Math.round(snapshot.progress || 0)));
@@ -769,7 +769,12 @@ export default function StudioPage() {
             };
           }));
         }
-        if (["complete", "partial", "failed", "cancelled"].includes(snapshot.status)) break;
+        if (["complete", "partial", "failed", "cancelled"].includes(snapshot.status)) {
+          const fullResponse = await fetch(`/api/background/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
+          if (!fullResponse.ok) throw new Error(await getFailureMessage(fullResponse));
+          snapshot = await fullResponse.json() as BackgroundJobSnapshot;
+          break;
+        }
         await new Promise((resolve) => window.setTimeout(resolve, 2_500));
       }
 
