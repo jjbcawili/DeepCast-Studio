@@ -505,8 +505,8 @@ export default function ProjectWorkspacePage() {
             <div className="project-overview-stats">
               <article><span>GROUNDED SOURCES</span><strong>{sources.length}</strong><small>{selectedSources.length} active in context</small></article>
               <article><span>AUDIO DEEP DIVES</span><strong>{deepDives.length}</strong><small>{audioReadyCount} audio ready</small></article>
-              <article><span>INTELLIGENCE MODEL</span><strong>GEMINI</strong><small>Search grounded</small></article>
-              <article><span>HOSTS ASSIGNED</span><strong>JIRO &amp; SHARPAY</strong><small>Saved studio voices</small></article>
+              <article><span>VOICE ENGINE</span><strong>CHATTERBOX</strong><small>Nano / Turbo cloning</small></article>
+              <article><span>HOSTS ASSIGNED</span><strong>JIRO &amp; SHARPAY</strong><small>Reference-cloned voices</small></article>
             </div>
             <div className="project-workspace-launchers">
               <button type="button" onClick={() => chooseTab("sources")}><i>▤</i><strong>MANAGE SOURCES &amp; WEB SEARCH</strong><span>Crawl links, upload files, or run grounded web research.</span></button>

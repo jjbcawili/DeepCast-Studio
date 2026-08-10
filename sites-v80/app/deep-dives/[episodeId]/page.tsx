@@ -7,7 +7,6 @@ import { readEpisodeAudio, requestEpisodePlayback } from "../../../lib/audio-lib
 import { readDeepDives, saveDeepDive, type StoredDeepDive } from "../../../lib/deep-dive-storage";
 import EpisodeDownloadMenu from "../../components/EpisodeDownloadMenu";
 import ActionToast from "../../components/ActionToast";
-import { downloadBlob, renderEpisodeExport } from "../../../lib/audio-export";
 
 function transcriptFor(episode: StoredDeepDive) {
   return episode.segments.map((segment) => `${segment.title}\n${segment.script.replace(/\\n/g, "\n")}`).join("\n\n");
@@ -18,21 +17,13 @@ export default function EpisodePage() {
   const episodeId = decodeURIComponent(params.episodeId);
   const [episode, setEpisode] = useState<StoredDeepDive | null>(null);
   const [hasAudio, setHasAudio] = useState(false);
-  const [episodeAudio, setEpisodeAudio] = useState<Blob | null>(null);
   const [notice, setNotice] = useState("");
-  const [musicFile, setMusicFile] = useState<{ name: string; url: string } | null>(null);
-  const [musicPlacement, setMusicPlacement] = useState<"continuous" | "intro-outro">("continuous");
-  const [autoLoop, setAutoLoop] = useState(true);
-  const [musicVolume, setMusicVolume] = useState(14);
-  const [voiceDucking, setVoiceDucking] = useState(true);
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [mixing, setMixing] = useState(false);
   const [retrying, setRetrying] = useState<number | null>(null);
 
   useEffect(() => {
     const found = readDeepDives().find((item) => item.id === episodeId) || null;
     setEpisode(found);
-    void readEpisodeAudio(episodeId).then((blob) => { setHasAudio(Boolean(blob)); setEpisodeAudio(blob); });
+    void readEpisodeAudio(episodeId).then((blob) => setHasAudio(Boolean(blob || found?.remoteAudioUrl)));
   }, [episodeId]);
 
   useEffect(() => {
@@ -46,6 +37,9 @@ export default function EpisodePage() {
         if (!response.ok) throw new Error(snapshot?.error || `Generation status failed (${response.status}).`);
         if (stopped) return;
         const nextStatus = snapshot.status === "complete" ? "Audio Ready" : snapshot.status === "partial" ? "Partial" : snapshot.status === "failed" || snapshot.status === "cancelled" ? "Failed" : snapshot.progress > 0 ? "Generating" : "Submitted";
+        const remoteAudioUrl = snapshot.status === "complete"
+          ? `/api/background/jobs/${encodeURIComponent(episode.backgroundJobId!)}/segments/1/audio`
+          : episode.remoteAudioUrl;
         const updated: StoredDeepDive = {
           ...episode,
           title: snapshot.script?.title || snapshot.title || episode.title,
@@ -57,10 +51,12 @@ export default function EpisodePage() {
           generationStage: snapshot.stage || episode.generationStage,
           generationError: snapshot.error || undefined,
           backgroundSegments: Array.isArray(snapshot.segments) ? snapshot.segments : undefined,
+          remoteAudioUrl,
           updatedAt: new Date().toISOString(),
         };
         saveDeepDive(updated);
         setEpisode(updated);
+        if (remoteAudioUrl) setHasAudio(true);
         if (!["complete", "partial", "failed", "cancelled"].includes(snapshot.status)) timer = window.setTimeout(refresh, 3000);
       } catch (error) {
         if (!stopped) {
@@ -87,6 +83,24 @@ export default function EpisodePage() {
     finally { setRetrying(null); }
   }
 
+  async function retryFailedEpisode() {
+    if (!episode?.backgroundJobId || episode.status !== "Failed" || retrying !== null) return;
+    setRetrying(-1);
+    try {
+      const response = await fetch(`/api/background/jobs/${encodeURIComponent(episode.backgroundJobId)}/segments/1/retry`, { method: "POST" });
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(body.error || "Episode retry could not be queued.");
+      const updated = { ...episode, status: "Generating" as const, generationStage: "Retry accepted. Resuming only the failed generation stage…", generationError: undefined, updatedAt: new Date().toISOString() };
+      saveDeepDive(updated);
+      setEpisode(updated);
+      setNotice("Retry queued. Completed script and audio work were preserved.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Episode retry failed.");
+    } finally {
+      setRetrying(null);
+    }
+  }
+
   const transcript = useMemo(() => episode ? transcriptFor(episode) : "", [episode]);
 
   function downloadTranscript() {
@@ -98,51 +112,6 @@ export default function EpisodePage() {
     anchor.download = `${episode.title.replace(/[^a-z0-9]+/gi, "-") || "DeepCast-Episode"}-Transcript.txt`;
     anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  function chooseMusic(file: File | undefined) {
-    if (!file) return;
-    if (!file.type.startsWith("audio/")) { setNotice("Choose a supported audio file."); return; }
-    if (musicFile?.url) URL.revokeObjectURL(musicFile.url);
-    setMusicFile({ name: file.name, url: URL.createObjectURL(file) });
-    setNotice(`${file.name} is ready for the post-production mix.`);
-  }
-
-  async function makeMusicMix(download: boolean) {
-    if (!episode || !episodeAudio || !musicFile || mixing) return;
-    setMixing(true);
-    setNotice(download ? "Exporting the music mix…" : "Preparing a preview mix…");
-    const voiceUrl = URL.createObjectURL(episodeAudio);
-    try {
-      const result = await renderEpisodeExport({
-        title: episode.title,
-        format: "wav",
-        spatialOutput: "spatial-stereo",
-        segments: [{ id: 1, title: episode.title, audioUrl: voiceUrl }],
-        musicEnabled: true,
-        musicTracks: [{ id: "episode-music", name: musicFile.name, url: musicFile.url }],
-        musicCueMode: "continuous",
-        defaultMusicTrackId: "episode-music",
-        segmentMusicMap: {},
-        musicVolume: voiceDucking ? Math.max(4, Math.round(musicVolume * .72)) : musicVolume,
-        autoLoopMusic: autoLoop,
-        musicPlacement,
-        introOutroBoost: musicPlacement === "intro-outro",
-      });
-      if (download) {
-        downloadBlob(result.blob, result.filename.replace(/\.wav$/i, "-Music-Mix.wav"));
-        setNotice("Music mix exported successfully.");
-      } else {
-        if (previewUrl) URL.revokeObjectURL(previewUrl);
-        setPreviewUrl(URL.createObjectURL(result.blob));
-        setNotice("Preview mix is ready.");
-      }
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The music mix could not be created.");
-    } finally {
-      URL.revokeObjectURL(voiceUrl);
-      setMixing(false);
-    }
   }
 
   if (!episode) return <main className="site-shell"><div className="page-container episode-detail-page"><Link className="project-workspace-back" href="/deep-dives">← BACK TO DEEP DIVES</Link><section className="glass-section library-empty-state"><strong>EPISODE NOT FOUND</strong><p>This episode is not available in this browser’s saved library.</p></section></div></main>;
@@ -164,6 +133,7 @@ export default function EpisodePage() {
               {episode.generationError && <p>{episode.generationError}</p>}
             </div>
             <div className="episode-detail-actions">
+              {episode.status === "Failed" && episode.backgroundJobId ? <button type="button" className="episode-retry-button" disabled={retrying !== null} onClick={() => void retryFailedEpisode()}>{retrying === -1 ? "QUEUING RETRY…" : "↻ RETRY FAILED GENERATION"}</button> : null}
               <button type="button" disabled={!hasAudio} onClick={() => requestEpisodePlayback(episode.id)}>▶ PLAY EPISODE</button>
               <Link href={`/studio/console?episode=${encodeURIComponent(episode.id)}`}>OPEN STUDIO CONSOLE</Link>
               <Link href={episode.projectId
@@ -174,18 +144,6 @@ export default function EpisodePage() {
             </div>
           </div>
         </section>
-        <details className="episode-post-production glass-section">
-          <summary><span>EPISODE CONSOLE</span><h2>POST-PRODUCTION MUSIC</h2></summary>
-          <div className="episode-music-controls">
-            <label className="episode-music-upload">ADD MUSIC<input type="file" accept="audio/*" onChange={(event) => chooseMusic(event.target.files?.[0])} /><span>{musicFile?.name || "UPLOAD OPTIONAL AUDIO"}</span></label>
-            <fieldset><legend>PLACEMENT</legend><label><input type="radio" name="music-placement" checked={musicPlacement === "intro-outro"} onChange={() => setMusicPlacement("intro-outro")} /> INTRO / OUTRO</label><label><input type="radio" name="music-placement" checked={musicPlacement === "continuous"} onChange={() => setMusicPlacement("continuous")} /> FULL EPISODE</label></fieldset>
-            <label className="episode-music-toggle"><input type="checkbox" checked={autoLoop} onChange={(event) => setAutoLoop(event.target.checked)} /><span /> AUTO LOOP</label>
-            <label className="episode-music-range">BACKGROUND VOLUME <b>{musicVolume}%</b><input type="range" min="0" max="45" value={musicVolume} onChange={(event) => setMusicVolume(Number(event.target.value))} /></label>
-            <label className="episode-music-toggle"><input type="checkbox" checked={voiceDucking} onChange={(event) => setVoiceDucking(event.target.checked)} /><span /> VOICE DUCKING</label>
-            <div className="episode-music-actions"><button type="button" disabled={!musicFile || !hasAudio || mixing} onClick={() => void makeMusicMix(false)}>{mixing ? "MIXING…" : "PREVIEW MIX"}</button><button type="button" disabled={!musicFile || !hasAudio || mixing} onClick={() => void makeMusicMix(true)}>EXPORT MUSIC MIX</button></div>
-            {previewUrl && <audio className="episode-music-preview" controls src={previewUrl} />}
-          </div>
-        </details>
         <details className="episode-detail-summary glass-section" open>
           <summary><span>EPISODE SUMMARY</span><h2>OVERVIEW</h2></summary>
           <p>{episode.summary || episode.topic}</p>

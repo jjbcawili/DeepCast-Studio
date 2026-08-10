@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
-import { TTS_VOICES, type TtsVoiceName } from "../../lib/tts-voices";
+import { useState } from "react";
+import type { TtsVoiceName } from "../../lib/tts-voices";
 
 export type HostId = "jiro" | "sharpay";
 
@@ -11,6 +11,9 @@ export type HostVoiceSettings = {
   style: string;
   pace: string;
   accent: string;
+  ttsEngine: "chatterbox-nano" | "chatterbox-turbo" | "gemini";
+  voiceReferenceKey?: string;
+  voiceReferenceName?: string;
 };
 
 type SpeakerSettingsProps = {
@@ -54,16 +57,44 @@ export default function SpeakerSettings({
   onVoiceSearchChange,
   onPreviewVoice,
 }: SpeakerSettingsProps) {
+  const [uploadingReference, setUploadingReference] = useState(false);
+  const [referenceError, setReferenceError] = useState("");
   const settings = hostSettings[activeHost];
   const hostLabel = hostNames[activeHost] || (activeHost === "jiro" ? "Jiro" : "Sharpay");
-  const filteredVoices = useMemo(() => {
-    const query = voiceSearch.trim().toLowerCase();
-    if (!query) return TTS_VOICES;
-    return TTS_VOICES.filter((voice) => `${voice.name} ${voice.character} ${voice.pitch} ${voice.provider}`.toLowerCase().includes(query));
-  }, [voiceSearch]);
+  const engineBadge = (engine: HostVoiceSettings["ttsEngine"]) => engine === "chatterbox-turbo" ? "CHATTERBOX TURBO" : "CHATTERBOX NANO";
 
   function update(patch: Partial<HostVoiceSettings>) {
     onHostSettingsChange(activeHost, { ...settings, ...patch });
+  }
+
+  async function uploadVoiceReference(file?: File) {
+    if (!file) return;
+    setUploadingReference(true);
+    setReferenceError("");
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      for (let index = 0; index < bytes.length; index += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+      }
+      const response = await fetch("/api/voice-references", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hostName: hostLabel,
+          fileName: file.name,
+          mimeType: file.type || "audio/wav",
+          audioBase64: btoa(binary),
+        }),
+      });
+      const result = await response.json().catch(() => null) as { voiceReferenceKey?: string; fileName?: string; error?: string } | null;
+      if (!response.ok || !result?.voiceReferenceKey) throw new Error(result?.error || "Voice reference upload failed.");
+      update({ voiceReferenceKey: result.voiceReferenceKey, voiceReferenceName: result.fileName || file.name });
+    } catch (error) {
+      setReferenceError(error instanceof Error ? error.message : "Voice reference upload failed.");
+    } finally {
+      setUploadingReference(false);
+    }
   }
 
   return (
@@ -72,10 +103,10 @@ export default function SpeakerSettings({
 
       <div className="speaker-tabs" role="tablist" aria-label="Choose host to configure">
         <button type="button" role="tab" aria-selected={activeHost === "jiro"} className={activeHost === "jiro" ? "active" : ""} onClick={() => onActiveHostChange("jiro")}>
-          <span>HOST 1</span><strong>{hostNames.jiro || "Jiro"}</strong><small>{hostSettings.jiro.voice}</small>
+          <span>HOST 1</span><strong>{hostNames.jiro || "Jiro"}</strong><small>{engineBadge(hostSettings.jiro.ttsEngine)}</small>
         </button>
         <button type="button" role="tab" aria-selected={activeHost === "sharpay"} className={activeHost === "sharpay" ? "active sharpay" : ""} onClick={() => onActiveHostChange("sharpay")}>
-          <span>HOST 2</span><strong>{hostNames.sharpay || "Sharpay"}</strong><small>{hostSettings.sharpay.voice}</small>
+          <span>HOST 2</span><strong>{hostNames.sharpay || "Sharpay"}</strong><small>{engineBadge(hostSettings.sharpay.ttsEngine)}</small>
         </button>
       </div>
 
@@ -121,46 +152,20 @@ export default function SpeakerSettings({
           <label><span>Accent</span><select value={settings.accent} onChange={(event) => update({ accent: event.target.value })}>{ACCENT_OPTIONS.map((option) => <option key={option}>{option}</option>)}</select></label>
         </div>
 
-        <div className="voice-library-heading">
-          <div><strong>Voice</strong><span>{filteredVoices.length} supported voices</span></div>
-          <span className="selected-voice-badge">Selected: {settings.voice}</span>
-        </div>
-        <label className="voice-search">
-          <span aria-hidden="true">⌕</span>
-          <input value={voiceSearch} onChange={(event) => onVoiceSearchChange(event.target.value)} placeholder="Search voices" aria-label="Search voices" />
-        </label>
-
-        <div className="voice-scroll" role="listbox" aria-label={`Select ${hostLabel}'s voice`} aria-activedescendant={`${activeHost}-voice-${settings.voice}`}>
-          {filteredVoices.map((voice) => {
-            const selected = settings.voice === voice.name;
-            const previewing = previewingVoice === `${activeHost}:${voice.name}`;
-            return (
-              <div className={`voice-option ${selected ? "selected" : ""}`} key={voice.name}>
-                <button
-                  id={`${activeHost}-voice-${voice.name}`}
-                  type="button"
-                  className="voice-select-button"
-                  role="option"
-                  aria-selected={selected}
-                  onClick={() => update({ voice: voice.name })}
-                >
-                  <span className="voice-option-name">{voice.name}{"defaultFor" in voice && voice.defaultFor === activeHost ? <b className="voice-default-badge">DEFAULT</b> : null}</span>
-                  <span className="voice-option-tags"><i>{voice.provider}</i><i>{voice.character}</i><i>{voice.pitch}</i></span>
-                </button>
-                <button type="button" className="voice-preview-button" onClick={() => onPreviewVoice(voice.name)} disabled={previewingVoice !== null} aria-label={`Preview ${voice.name} voice`} title={`Preview ${voice.name}`}>
-                  {previewing ? "PREPARING…" : "▶ PREVIEW"}
-                </button>
-              </div>
-            );
-          })}
-          {filteredVoices.length === 0 && <p className="voice-empty">No voices match “{voiceSearch}”.</p>}
-        </div>
-        {previewAudioUrl && (
-          <div className="voice-preview-player">
-            <span>VOICE PREVIEW · {previewLabel}</span>
-            <audio key={previewAudioUrl} controls autoPlay src={previewAudioUrl} />
+        <div className="tts-engine-panel">
+          <div className="voice-library-heading"><div><strong>VOICE CLONING ENGINE</strong><span>Reference-conditioned Chatterbox synthesis</span></div></div>
+          <label className="approved-field-label" htmlFor={`${activeHost}-tts-engine`}>Engine</label>
+          <select id={`${activeHost}-tts-engine`} className="approved-studio-input" value={settings.ttsEngine} onChange={(event) => update({ ttsEngine: event.target.value as HostVoiceSettings["ttsEngine"] })}>
+            <option value="chatterbox-nano">Chatterbox Nano · CPU clone</option>
+            <option value="chatterbox-turbo">Chatterbox Turbo · quality clone</option>
+          </select>
+          <div className="voice-reference-box">
+            <strong>VOICE REFERENCE</strong>
+            <p>Upload a clean 5–20 second clip with one speaker, no music, and minimal room echo. The private reference is stored in DeepCast R2.</p>
+            <label className="voice-reference-upload">＋ {uploadingReference ? "UPLOADING REFERENCE…" : "UPLOAD VOICE REFERENCE"}<input type="file" accept="audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,.wav,.mp3,.m4a" disabled={uploadingReference} onChange={(event) => void uploadVoiceReference(event.target.files?.[0])} /></label>
+            <small className={referenceError ? "voice-reference-error" : ""}>{referenceError || (settings.voiceReferenceName ? `Saved: ${settings.voiceReferenceName}` : "Reference required before generation.")}</small>
           </div>
-        )}
+        </div>
       </div>
     </section>
   );

@@ -12,11 +12,12 @@ export type StoredDeepDive = {
   updatedAt: string;
   status: StoredDeepDiveStatus;
   backgroundJobId?: string;
+  remoteAudioUrl?: string;
   progress?: number;
   generationStage?: string;
   generationError?: string;
   backgroundSegments?: Array<{ id: number; status: "queued" | "processing" | "complete" | "failed"; error?: string }>;
-  engine?: "Gemini TTS" | "Eleven v3" | "Multilingual v2 fallback";
+  engine?: string;
   coverImage?: string;
   runtimeSeconds?: number;
   summary?: string;
@@ -48,6 +49,7 @@ export function readDeepDives(): StoredDeepDive[] {
       updatedAt: String(item.updatedAt || item.createdAt || new Date().toISOString()),
       status: item.status === "Draft" || item.status === "Submitted" || item.status === "Ready to Generate" || item.status === "Generating" || item.status === "Partial" || item.status === "Failed" ? item.status : "Audio Ready",
       backgroundJobId: typeof item.backgroundJobId === "string" ? item.backgroundJobId : undefined,
+      remoteAudioUrl: typeof item.remoteAudioUrl === "string" ? item.remoteAudioUrl : undefined,
       progress: Number.isFinite(Number(item.progress)) ? Number(item.progress) : undefined,
       generationStage: typeof item.generationStage === "string" ? item.generationStage : undefined,
       generationError: typeof item.generationError === "string" ? item.generationError : undefined,
@@ -56,9 +58,7 @@ export function readDeepDives(): StoredDeepDive[] {
         status: segment.status === "processing" || segment.status === "complete" || segment.status === "failed" ? segment.status : "queued",
         error: typeof segment.error === "string" ? segment.error : undefined,
       })) : undefined,
-      engine: item.engine === "Eleven v3" || item.engine === "Multilingual v2 fallback"
-        ? item.engine
-        : "Gemini TTS",
+      engine: typeof item.engine === "string" && item.engine.trim() ? item.engine : "Gemini TTS",
       coverImage: typeof item.coverImage === "string" ? item.coverImage : undefined,
       runtimeSeconds: Number.isFinite(Number(item.runtimeSeconds)) ? Number(item.runtimeSeconds) : undefined,
       summary: typeof item.summary === "string" && item.summary.trim()

@@ -29,7 +29,7 @@ type AudioSegment = EpisodeSegment & {
   audioUrl?: string;
   status: "pending" | "generating" | "ready" | "failed";
   error?: string;
-  engine?: "Gemini TTS";
+  engine?: string;
   fallbackUsed?: boolean;
 };
 type DriveConnection = "disconnected" | "connecting" | "connected" | "error";
@@ -176,6 +176,7 @@ export default function StudioPage() {
       style: "Dry Wit",
       pace: "Conversational",
       accent: "American (General)",
+      ttsEngine: "chatterbox-nano",
     },
     sharpay: {
       voice: "Achernar",
@@ -183,6 +184,7 @@ export default function StudioPage() {
       style: "Vocal Smile",
       pace: "Up-tempo",
       accent: "American (General)",
+      ttsEngine: "chatterbox-nano",
     },
   });
   const [voiceSearch, setVoiceSearch] = useState("");
@@ -763,7 +765,7 @@ export default function StudioPage() {
               audioUrl: existing?.audioUrl,
               status: remote?.status === "complete" ? "ready" : remote?.status === "failed" ? "failed" : remote?.status === "processing" ? "generating" : "pending",
               error: remote?.error || undefined,
-              engine: remote?.engine ? "Gemini TTS" : existing?.engine,
+              engine: remote?.engine || existing?.engine,
             };
           }));
         }
@@ -788,7 +790,7 @@ export default function StudioPage() {
           readySegments.push({ ...segment, status: "failed", error: await getFailureMessage(audioResponse) });
           continue;
         }
-        readySegments.push({ ...segment, status: "ready", audioUrl: URL.createObjectURL(await audioResponse.blob()), engine: "Gemini TTS" });
+        readySegments.push({ ...segment, status: "ready", audioUrl: URL.createObjectURL(await audioResponse.blob()), engine: remote?.engine || "Chatterbox" });
       }
       setAudioSegments(readySegments);
 
@@ -837,7 +839,7 @@ export default function StudioPage() {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         status: allReady ? "Audio Ready" : "Failed",
-        engine: "Gemini TTS",
+        engine: readySegments.find((segment) => segment.engine)?.engine || "Chatterbox",
         coverImage: selectedCover || automaticCoverFor(`${selectedProjectId || "independent"}-${snapshot.script.title}-${storedEpisodeId}`),
         runtimeSeconds,
         summary: snapshot.script.summary || snapshot.script.outline.slice(0, 2).map((entry) => entry.summary).join(" "),
@@ -880,6 +882,12 @@ export default function StudioPage() {
       setNotice("Enter two different host names before generating.");
       return;
     }
+    for (const [label, settings] of [[jiroName, hostSettings.jiro], [sharpayName, hostSettings.sharpay]] as const) {
+      if (settings.ttsEngine !== "gemini" && !settings.voiceReferenceKey) {
+        setNotice(`Upload a clean voice reference for ${label} before using Chatterbox.`);
+        return;
+      }
+    }
     setIsGenerating(true);
     setGenerationProgress(0);
     setGenerationStage("Submitting a durable background job…");
@@ -899,6 +907,8 @@ export default function StudioPage() {
           jiroStyle: hostSettings.jiro.style, sharpayStyle: hostSettings.sharpay.style,
           jiroPace: hostSettings.jiro.pace, sharpayPace: hostSettings.sharpay.pace,
           jiroAccent: hostSettings.jiro.accent, sharpayAccent: hostSettings.sharpay.accent,
+          jiroTtsEngine: hostSettings.jiro.ttsEngine, sharpayTtsEngine: hostSettings.sharpay.ttsEngine,
+          jiroVoiceReferenceKey: hostSettings.jiro.voiceReferenceKey, sharpayVoiceReferenceKey: hostSettings.sharpay.voiceReferenceKey,
         }),
       });
       if (!response.ok) throw new Error(await getFailureMessage(response));

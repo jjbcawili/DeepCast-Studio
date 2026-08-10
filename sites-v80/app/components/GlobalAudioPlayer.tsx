@@ -81,7 +81,7 @@ export default function GlobalAudioPlayer() {
       const nextEpisode = readDeepDives().find((item) => item.id === id) || null;
       if (!nextEpisode) return;
       const blob = await readEpisodeAudio(id).catch(() => null);
-      if (!blob) {
+      if (!blob && !nextEpisode.remoteAudioUrl) {
         window.dispatchEvent(new CustomEvent("deepcast-player-error", { detail: { message: "This episode record has no saved audio yet. Reopen it in Studio to generate the audio." } }));
         return;
       }
@@ -93,7 +93,7 @@ export default function GlobalAudioPlayer() {
       setDuration(nextEpisode.runtimeSeconds || saved?.duration || 0);
       setAudioUrl((current) => {
         if (current) URL.revokeObjectURL(current);
-        return URL.createObjectURL(blob);
+        return blob ? URL.createObjectURL(blob) : nextEpisode.remoteAudioUrl!;
       });
       window.setTimeout(() => {
         const player = audioRef.current;

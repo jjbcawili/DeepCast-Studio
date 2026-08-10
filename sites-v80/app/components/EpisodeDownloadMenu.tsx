@@ -27,7 +27,12 @@ export default function EpisodeDownloadMenu({ episode, disabled = false, compact
     setWorking(format);
     onStatus?.(`Preparing ${format === "m4a" ? "M4A 256 kbps" : format === "mp3" ? "MP3 320 kbps" : "WAV 48 kHz"}…`);
     try {
-      const original = await readEpisodeAudio(episode.id);
+      let original = await readEpisodeAudio(episode.id);
+      if (!original && episode.remoteAudioUrl) {
+        const response = await fetch(episode.remoteAudioUrl);
+        if (!response.ok) throw new Error(`Finished audio download failed (${response.status}).`);
+        original = await response.blob();
+      }
       if (!original) throw new Error("No saved audio is available for this episode.");
       if (format === "wav") {
         downloadBlob(original, `${episode.title.replace(/[^a-z0-9]+/gi, "-") || "DeepCast-Episode"}-Spatial-Stereo.wav`);
