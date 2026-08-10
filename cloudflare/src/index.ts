@@ -44,11 +44,11 @@ async function setEpisode(env:Env,episodeId:string,status:string,progress:number
   await event(env,episodeId,status,message);
 }
 async function getEpisodeRow(env:Env,episodeId:string){return env.DB.prepare('SELECT * FROM episodes WHERE id=?').bind(episodeId).first();}
-async function episodeJson(env:Env,row:any){
+async function episodeJson(env:Env,row:any,compact=false){
   const events=(await env.DB.prepare('SELECT status,message,created_at FROM episode_events WHERE episode_id=? ORDER BY id ASC LIMIT 100').bind(row.id).all()).results||[];
   const assets=(await env.DB.prepare('SELECT kind,label,access_token FROM episode_assets WHERE episode_id=? ORDER BY created_at ASC').bind(row.id).all()).results||[];
   const request=JSON.parse(row.request_json||'{}');
-  return {id:row.id,remoteId:row.id,title:row.title,summary:request.generatedSummary||row.prompt,prompt:row.prompt,projectId:row.project_id||undefined,format:row.format,runtime:row.runtime,script:row.script||undefined,createdAt:row.created_at,updatedAt:row.updated_at,engine:row.engine||undefined,status:row.status,progress:row.progress,progressMessage:row.progress_message,error:row.error||undefined,retryable:!!row.retryable,events:events.map((e:any)=>({at:e.created_at,status:e.status,message:e.message})),assets:assets.map((a:any)=>({kind:a.kind,label:a.label||undefined,url:`${env.PUBLIC_BASE_URL}/public/assets/${a.access_token}`}))};
+  return {id:row.id,remoteId:row.id,title:row.title,summary:request.generatedSummary||row.prompt,prompt:compact?undefined:row.prompt,projectId:row.project_id||undefined,format:row.format,runtime:row.runtime,script:compact?undefined:(row.script||undefined),createdAt:row.created_at,updatedAt:row.updated_at,engine:row.engine||undefined,status:row.status,progress:row.progress,progressMessage:row.progress_message,error:row.error||undefined,retryable:!!row.retryable,events:compact?undefined:events.map((e:any)=>({at:e.created_at,status:e.status,message:e.message})),assets:assets.map((a:any)=>({kind:a.kind,label:a.label||undefined,url:`${env.PUBLIC_BASE_URL}/public/assets/${a.access_token}`}))};
 }
 async function assertOwner(req:Request,env:Env,episodeId:string){const u=await requestUser(req,env);const row=await getEpisodeRow(env,episodeId);if(!row)throw new Error('NOT_FOUND');if(row.user_id!==u.uid)throw new Error('FORBIDDEN');return {u,row};}
 
@@ -198,7 +198,7 @@ async function handle(req:Request,env:Env){
       const u=await requestUser(req,env); const since=new Date(Date.now()-86400000).toISOString();const count:any=await env.DB.prepare('SELECT COUNT(*) n FROM episodes WHERE user_id=? AND created_at>=?').bind(u.uid,since).first();const cap=Math.max(1,Number(env.MAX_DAILY_EPISODES||3));if(Number(count?.n||0)>=cap)return reply({error:`Daily safety cap reached (${cap} episodes). This prevents runaway free-tier usage.`},429,cors);
       const b:any=await req.json();if(!String(b.prompt||'').trim()&&!String(b.scriptGuidance||'').trim())return reply({error:'Prompt or script guidance is required.'},400,cors);const episodeId=id('ep');const created=now();await env.DB.prepare(`INSERT INTO episodes(id,user_id,local_episode_id,title,prompt,project_id,format,runtime,request_json,status,progress,progress_message,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(episodeId,u.uid,b.localEpisodeId||null,b.episodeTitle||'Untitled Deep Dive',b.prompt||b.scriptGuidance,b.projectId||null,b.format||'Deep Dive',b.runtime||'45',JSON.stringify(b),'QUEUED',5,'Episode accepted. Waiting for the background script queue.',created,created).run();await event(env,episodeId,'QUEUED','Episode accepted by the background queue.');await env.EPISODE_QUEUE.send({kind:'plan',episodeId});return reply({episode:await episodeJson(env,await getEpisodeRow(env,episodeId))},202,cors);
     }
-    const m=url.pathname.match(/^\/api\/episodes\/([^/]+)$/);if(m&&req.method==='GET'){const {row}=await assertOwner(req,env,m[1]);const hydrated=await ensureEpisodeMetadata(env,row);return reply({episode:await episodeJson(env,hydrated)},200,cors);}
+    const m=url.pathname.match(/^\/api\/episodes\/([^/]+)$/);if(m&&req.method==='GET'){const {row}=await assertOwner(req,env,m[1]);const compact=url.searchParams.get('compact')==='1';const hydrated=compact?row:await ensureEpisodeMetadata(env,row);return reply({episode:await episodeJson(env,hydrated,compact)},200,cors);}
     const retry=url.pathname.match(/^\/api\/episodes\/([^/]+)\/retry$/);if(retry&&req.method==='POST'){
       const {row}=await assertOwner(req,env,retry[1]);
       if(row.status!=='FAILED'||!row.retryable)return reply({error:'This episode is not retryable.'},409,cors);
@@ -238,7 +238,7 @@ async function handle(req:Request,env:Env){
     }
     const statusUpdate=url.pathname.match(/^\/internal\/audio-status\/([^/]+)$/);if(statusUpdate&&req.method==='POST'){
       if(!env.TTS_SHARED_SECRET||req.headers.get('authorization')!==`Bearer ${env.TTS_SHARED_SECRET}`)return new Response('Forbidden',{status:403});
-      const b:any=await req.json();const row=await getEpisodeRow(env,statusUpdate[1]);if(!row)return reply({error:'Episode not found'},404,cors);if(row.status==='CANCELLED')return reply({ok:false,cancelled:true},409,cors);
+      const b:any=await req.json();const row=await getEpisodeRow(env,statusUpdate[1]);if(!row)return reply({error:'Episode not found'},404,cors);if(row.status==='CANCELLED')return reply({ok:false,cancelled:true},409,cors);if(row.status==='COMPLETE')return reply({ok:true,complete:true},200,cors);
       const allowed=new Set(['SYNTHESIZING','MIXING','FAILED']);const status=allowed.has(String(b.status))?String(b.status):'SYNTHESIZING';
       await setEpisode(env,row.id,status,Math.max(0,Math.min(100,Number(b.progress??row.progress))),String(b.message||'Audio worker status update.'),{error:b.error?String(b.error):null,failedStage:b.failedStage?String(b.failedStage):null,retryable:status==='FAILED'?1:1});
       return reply({ok:true},200,cors);
@@ -248,12 +248,13 @@ async function handle(req:Request,env:Env){
       if(!req.body)return new Response('Missing body',{status:400});
       const episodeId=upload[1],part=upload[2],kind=url.searchParams.get('kind')||'segment',ext=(url.searchParams.get('ext')||'mp3').replace(/[^a-z0-9]/g,'');
       const current=await getEpisodeRow(env,episodeId);if(!current||current.status==='CANCELLED')return new Response('Episode unavailable',{status:409});
+      const episodeRequest=JSON.parse(current.request_json||'{}');
       const key=`episodes/${episodeId}/${kind==='final'?'final':`segments/${part}`}.${ext}`;
       await env.AUDIO.put(key,req.body,{httpMetadata:{contentType:ext==='mp3'?'audio/mpeg':ext==='m4a'?'audio/mp4':ext==='wav'?'audio/wav':'application/octet-stream'}});
       if(kind==='final'){
         const existing=await env.DB.prepare('SELECT id FROM episode_assets WHERE episode_id=? AND kind=? LIMIT 1').bind(episodeId,ext).first();
         if(!existing){const token=crypto.randomUUID()+crypto.randomUUID();await env.DB.prepare('INSERT INTO episode_assets(id,episode_id,kind,r2_key,label,access_token,created_at) VALUES(?,?,?,?,?,?,?)').bind(id('asset'),episodeId,ext,key,'Finished DeepCast episode',token,now()).run();}
-        await setEpisode(env,episodeId,'COMPLETE',100,'Episode generation complete. Audio is ready to play and download.',{engine:`Workers AI / Groq → ${ttsLabel(request)} → FFmpeg`,retryable:0});
+        await setEpisode(env,episodeId,'COMPLETE',100,'Episode generation complete. Audio is ready to play and download.',{engine:`Workers AI / Groq → ${ttsLabel(episodeRequest)} → FFmpeg`,retryable:0});
       }else{
         await env.DB.prepare('UPDATE episode_segments SET audio_key=?,status=?,error=NULL,updated_at=? WHERE episode_id=? AND segment_index=?').bind(key,'AUDIO_READY',now(),episodeId,Number(part)).run();
         const row=await getEpisodeRow(env,episodeId);const done:any=await env.DB.prepare('SELECT COUNT(*) n FROM episode_segments WHERE episode_id=? AND audio_key IS NOT NULL').bind(episodeId).first();
