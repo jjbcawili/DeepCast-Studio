@@ -72,17 +72,22 @@ jobs:
           engines={str((payload.get(k) or {}).get('ttsEngine') or 'chatterbox-nano') for k in ('host1','host2')}
           with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as out:
               out.write(f"needs_f5={'true' if 'f5-tts' in engines else 'false'}\n")
+              out.write(f"needs_fish={'true' if 'fish-s2' in engines else 'false'}\n")
               out.write('engines='+','.join(sorted(engines))+'\n')
           print('Requested engines:', ', '.join(sorted(engines)))
           PY
       - name: Install F5-TTS alternate cloning engine
         if: steps.engines.outputs.needs_f5 == 'true'
         run: python -m pip install --disable-pip-version-check "f5-tts==1.1.22"
+      - name: Install Fish Audio hosted S2 SDK
+        if: steps.engines.outputs.needs_fish == 'true'
+        run: python -m pip install --disable-pip-version-check "fish-audio-sdk>=1.0.0"
       - name: Run DeepCast multi-engine TTS / FFmpeg job
         env:
           DEEPCAST_CALLBACK_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
           TTS_SHARED_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          FISH_API_KEY: ${{ secrets.FISH_API_KEY }}
           DEEPCAST_FISH_S2_URL: ${{ secrets.DEEPCAST_FISH_S2_URL }}
           DEEPCAST_FISH_S2_TOKEN: ${{ secrets.DEEPCAST_FISH_S2_TOKEN }}
           DEEPCAST_DIA2_URL: ${{ secrets.DEEPCAST_DIA2_URL }}
