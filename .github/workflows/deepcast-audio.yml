@@ -90,8 +90,9 @@ jobs:
           FISH_API_KEY: ${{ secrets.FISH_API_KEY }}
           DEEPCAST_FISH_S2_URL: ${{ secrets.DEEPCAST_FISH_S2_URL }}
           DEEPCAST_FISH_S2_TOKEN: ${{ secrets.DEEPCAST_FISH_S2_TOKEN }}
-          DEEPCAST_DIA2_URL: ${{ secrets.DEEPCAST_DIA2_URL }}
-          DEEPCAST_DIA2_TOKEN: ${{ secrets.DEEPCAST_DIA2_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DEEPCAST_DIA2_URL: ${{ vars.DEEPCAST_DIA2_URL || secrets.DEEPCAST_DIA2_URL }}
+          DEEPCAST_DIA2_TOKEN: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
         run: |
           cd tts-worker
           python job.py \
