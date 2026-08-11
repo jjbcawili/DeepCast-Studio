@@ -11,7 +11,13 @@ import soundfile as sf
 import gradio as gr
 from kokoro import KPipeline
 from chatterbox_engine import download_reference, synthesize_chatterbox
-from engine_adapters import synthesize_f5, synthesize_gpu_bridge, synthesize_orpheus
+from engine_adapters import (
+    synthesize_dia2_dialogue,
+    synthesize_f5,
+    synthesize_fish_s2,
+    synthesize_gpu_bridge,
+    synthesize_orpheus,
+)
 
 SAMPLE_RATE = 24000
 SHARED_SECRET = os.environ.get("TTS_SHARED_SECRET", "")
@@ -112,6 +118,15 @@ def parse_dialogue(script: str, host1: dict, host2: dict):
     return turns
 
 
+def dia2_dialogue_script(script: str, host1: dict, host2: dict):
+    name1 = str(host1.get("name") or "Jiro").strip().lower()
+    lines = []
+    for who, text in parse_dialogue(script, host1, host2):
+        tag = "[S1]" if who.lower() == name1 else "[S2]"
+        lines.append(f"{tag} {text}")
+    return "\n".join(lines)
+
+
 def require_secret(payload: dict):
     if not SHARED_SECRET or payload.get("sharedSecret") != SHARED_SECRET:
         raise ValueError("Unauthorized TTS worker request")
@@ -150,41 +165,59 @@ def synthesize(payload_json: str) -> str:
                 )
                 references[slot] = wav_ref
 
-        for who, turn_text in turns:
-            is_host1 = who.lower() == str(host1.get("name") or "Jiro").lower()
-            config = host1 if is_host1 else host2
-            slot = "host1" if is_host1 else "host2"
-            engine = engine_for(config)
+        engine1, engine2 = engine_for(host1), engine_for(host2)
+        if engine1 == "dia2" and engine2 == "dia2":
+            # Dia2 is a native two-speaker model. Generate the whole segment together
+            # rather than destroying its dialogue context one turn at a time.
+            mono, rate = synthesize_dia2_dialogue(
+                dia2_dialogue_script(payload.get("script") or "", host1, host2),
+                references["host1"],
+                references["host2"],
+                host1,
+                host2,
+            )
+            mono = resample_audio(mono, rate)
+            pieces.append(standard_stereo(mono))
+        else:
+            for who, turn_text in turns:
+                is_host1 = who.lower() == str(host1.get("name") or "Jiro").lower()
+                config = host1 if is_host1 else host2
+                slot = "host1" if is_host1 else "host2"
+                engine = engine_for(config)
 
-            if engine.startswith("chatterbox"):
-                mono, rate = synthesize_chatterbox(turn_text, engine, references[slot])
-                mono = resample_audio(mono, rate)
-            elif engine == "f5-tts":
-                mono, rate = synthesize_f5(
-                    turn_text,
-                    references[slot],
-                    config.get("voiceReferenceText") or "",
-                    config.get("pace") or "Medium",
-                )
-                mono = resample_audio(mono, rate)
-            elif engine in {"fish-s2", "dia2"}:
-                mono, rate = synthesize_gpu_bridge(engine, turn_text, references[slot], config)
-                mono = resample_audio(mono, rate)
-            elif engine == "groq-orpheus":
-                mono, rate = synthesize_orpheus(
-                    turn_text,
-                    config.get("voice") or ("daniel" if is_host1 else "hannah"),
-                    config.get("style") or "",
-                    config.get("pace") or "Medium",
-                )
-                mono = resample_audio(mono, rate)
-            else:
-                voice = voice1 if is_host1 else voice2
-                mono = synth_text(turn_text, voice, config.get("pace") or "Medium")
+                if engine.startswith("chatterbox"):
+                    mono, rate = synthesize_chatterbox(turn_text, engine, references[slot])
+                    mono = resample_audio(mono, rate)
+                elif engine == "f5-tts":
+                    mono, rate = synthesize_f5(
+                        turn_text,
+                        references[slot],
+                        config.get("voiceReferenceText") or "",
+                        config.get("pace") or "Medium",
+                    )
+                    mono = resample_audio(mono, rate)
+                elif engine == "fish-s2":
+                    mono, rate = synthesize_fish_s2(turn_text, references[slot], config)
+                    mono = resample_audio(mono, rate)
+                elif engine == "dia2":
+                    # Mixed-engine episodes can still use the bridge in single-speaker mode.
+                    mono, rate = synthesize_gpu_bridge("dia2", turn_text, references[slot], config)
+                    mono = resample_audio(mono, rate)
+                elif engine == "groq-orpheus":
+                    mono, rate = synthesize_orpheus(
+                        turn_text,
+                        config.get("voice") or ("daniel" if is_host1 else "hannah"),
+                        config.get("style") or "",
+                        config.get("pace") or "Medium",
+                    )
+                    mono = resample_audio(mono, rate)
+                else:
+                    voice = voice1 if is_host1 else voice2
+                    mono = synth_text(turn_text, voice, config.get("pace") or "Medium")
 
-            turn = stereo_turn(mono, -0.16 if is_host1 else 0.16) if spatial else standard_stereo(mono)
-            pieces.append(turn)
-            pieces.append(turn_gap)
+                turn = stereo_turn(mono, -0.16 if is_host1 else 0.16) if spatial else standard_stereo(mono)
+                pieces.append(turn)
+                pieces.append(turn_gap)
 
         audio = np.concatenate(pieces, axis=0) if pieces else turn_gap
         wav = td_path / "segment.wav"

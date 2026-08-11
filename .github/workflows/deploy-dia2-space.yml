@@ -1,0 +1,131 @@
+name: Deploy DeepCast Dia2 GPU Bridge
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, agent/activate-all-tts-phases]
+    paths:
+      - '.github/workflows/deploy-dia2-space.yml'
+      - 'gpu-services/dia2/**'
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      DEEPCAST_CALLBACK_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check deployment credentials
+        id: auth
+        shell: bash
+        run: |
+          if [ -n "${HF_TOKEN:-}" ] && [ -n "${DEEPCAST_CALLBACK_SECRET:-}" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+            echo 'Hugging Face deployment credentials are available.'
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo 'Dia2 deployment is blocked: HF_TOKEN or DEEPCAST_CALLBACK_SECRET is missing.'
+          fi
+      - name: Install Hugging Face deployment client
+        if: steps.auth.outputs.ready == 'true'
+        run: python -m pip install --disable-pip-version-check 'huggingface-hub>=1.0,<2.0'
+      - name: Create/update private Dia2 Docker Space
+        if: steps.auth.outputs.ready == 'true'
+        id: space
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, re
+          from huggingface_hub import HfApi
+          token=os.environ['HF_TOKEN']
+          api=HfApi(token=token)
+          who=api.whoami(token=token)
+          namespace=str(who.get('name') or who.get('fullname') or '').strip()
+          if not namespace:
+              raise SystemExit('Could not determine Hugging Face namespace from HF_TOKEN.')
+          repo_id=f"{namespace}/deepcast-dia2"
+          api.create_repo(repo_id=repo_id, repo_type='space', space_sdk='docker', private=True, exist_ok=True, token=token)
+          api.add_space_secret(repo_id=repo_id, key='DEEPCAST_DIA2_TOKEN', value=os.environ['DEEPCAST_CALLBACK_SECRET'], description='DeepCast authenticated TTS bridge token', token=token)
+          api.upload_folder(repo_id=repo_id, repo_type='space', folder_path='gpu-services/dia2', commit_message='Deploy DeepCast Dia2 GPU bridge', token=token)
+          runtime=api.request_space_hardware(repo_id=repo_id, hardware='l4x1', sleep_time=900, token=token)
+          slug=re.sub(r'[^a-z0-9-]+','-',repo_id.lower().replace('/','-')).strip('-')
+          endpoint=f"https://{slug}.hf.space/synthesize"
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as out:
+              out.write(f"repo_id={repo_id}\n")
+              out.write(f"endpoint={endpoint}\n")
+          print('Dia2 Space:', repo_id)
+          print('Requested hardware:', getattr(runtime,'requested_hardware',None) or 'l4x1')
+          print('Endpoint:', endpoint)
+          PY
+      - name: Publish Dia2 endpoint as repository variable
+        if: steps.auth.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENDPOINT: ${{ steps.space.outputs.endpoint }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/variables/DEEPCAST_DIA2_URL"
+          code="$(curl -sS -o /tmp/var.json -w '%{http_code}' -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "$api")"
+          data="$(python -c 'import json,os;print(json.dumps({"name":"DEEPCAST_DIA2_URL","value":os.environ["ENDPOINT"]}))')"
+          if [ "$code" = 200 ]; then
+            curl --fail-with-body -sS -X PATCH -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "$api" -d "$data"
+          else
+            curl --fail-with-body -sS -X POST -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/variables" -d "$data"
+          fi
+      - name: Wait for Dia2 Space runtime
+        if: steps.auth.outputs.ready == 'true'
+        env:
+          REPO_ID: ${{ steps.space.outputs.repo_id }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, time
+          from huggingface_hub import HfApi
+          api=HfApi(token=os.environ['HF_TOKEN'])
+          repo=os.environ['REPO_ID']
+          for attempt in range(30):
+              runtime=api.get_space_runtime(repo_id=repo, token=os.environ['HF_TOKEN'])
+              print('Dia2 runtime:', runtime.stage, 'hardware=', runtime.hardware, 'requested=', runtime.requested_hardware)
+              if str(runtime.stage).upper() == 'RUNNING' and runtime.hardware == 'l4x1':
+                  break
+              if 'ERROR' in str(runtime.stage).upper():
+                  raise SystemExit(f'Dia2 Space entered {runtime.stage}')
+              time.sleep(20)
+          else:
+              raise SystemExit('Dia2 Space did not reach RUNNING/l4x1 during deployment verification.')
+          PY
+      - name: Verify authenticated Dia2 health endpoint
+        if: steps.auth.outputs.ready == 'true'
+        env:
+          ENDPOINT: ${{ steps.space.outputs.endpoint }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${ENDPOINT%/synthesize}"
+          for attempt in $(seq 1 12); do
+            code="$(curl -sS -o /tmp/dia-health.json -w '%{http_code}' -H "Authorization: Bearer ${HF_TOKEN}" "${base}/health" || true)"
+            if [ "$code" = 200 ] && grep -q '"ok":true' /tmp/dia-health.json; then cat /tmp/dia-health.json; exit 0; fi
+            echo "Dia2 health attempt ${attempt}: HTTP ${code}"
+            sleep 10
+          done
+          echo '::error::Dia2 private Space never returned healthy.'
+          exit 1
+      - name: Deployment status
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.auth.outputs.ready }}" = true ]; then
+            echo 'Dia2 deployment workflow executed.'
+          else
+            echo 'Dia2 deployment scaffold is ready but no HF_TOKEN is configured.'
+          fi

@@ -1,0 +1,95 @@
+name: TTS Provider Activation Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, agent/activate-all-tts-phases]
+    paths:
+      - '.github/workflows/tts-provider-smoke.yml'
+      - 'tts-worker/**'
+      - 'gpu-services/**'
+
+permissions:
+  contents: read
+
+jobs:
+  providers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      FISH_API_KEY: ${{ secrets.FISH_API_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Report provider credential presence
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in GROQ_API_KEY FISH_API_KEY HF_TOKEN; do
+            if [ -n "${!name:-}" ]; then echo "$name=present"; else echo "$name=missing"; fi
+          done
+      - name: Smoke Groq Orpheus with real WAV synthesis
+        id: orpheus
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${GROQ_API_KEY:-}" ]; then echo 'GROQ_API_KEY missing'; exit 2; fi
+          code="$(curl -sS -o /tmp/orpheus-output -w '%{http_code}' \
+            'https://api.groq.com/openai/v1/audio/speech' -X POST \
+            -H "Authorization: Bearer ${GROQ_API_KEY}" \
+            -H 'Content-Type: application/json' -H 'Accept: audio/wav' -H 'User-Agent: DeepCast-Studio/1.0' \
+            -d '{"model":"canopylabs/orpheus-v1-english","input":"[warm] DeepCast provider activation test.","voice":"daniel","response_format":"wav"}')"
+          if [ "$code" != 200 ]; then echo "Orpheus HTTP $code: $(head -c 1200 /tmp/orpheus-output)"; exit 1; fi
+          python - <<'PY'
+          import wave
+          with wave.open('/tmp/orpheus-output','rb') as w:
+              if w.getnframes() <= 0: raise SystemExit('Orpheus WAV has no frames')
+              print('Orpheus smoke OK:', w.getframerate(), 'Hz', w.getnframes(), 'frames')
+          PY
+      - name: Probe Fish Audio account when configured
+        id: fish
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${FISH_API_KEY:-}" ]; then echo 'Fish Audio key is not configured in GitHub Actions.'; exit 0; fi
+          python -m pip install --disable-pip-version-check 'fish-audio-sdk>=1.0.0'
+          python - <<'PY'
+          from fishaudio import FishAudio
+          client=FishAudio()
+          credits=client.account.get_credits()
+          print('Fish Audio authentication OK; credit object received:', type(credits).__name__)
+          PY
+      - name: Check Cloudflare Worker secret names for reusable provider tokens
+        if: always() && env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund >/dev/null
+          names="$(npx wrangler secret list --name deepcast-background-backend 2>/dev/null || true)"
+          echo "$names" | grep -q 'HF_TOKEN' && echo 'Cloudflare HF_TOKEN=present' || echo 'Cloudflare HF_TOKEN=missing'
+          echo "$names" | grep -q 'FISH_API_KEY' && echo 'Cloudflare FISH_API_KEY=present' || echo 'Cloudflare FISH_API_KEY=missing'
+      - name: Activation summary
+        if: always()
+        shell: bash
+        run: |
+          echo "Orpheus smoke outcome: ${{ steps.orpheus.outcome }}"
+          echo "Fish hosted credential probe outcome: ${{ steps.fish.outcome }}"
+          if [ "${{ steps.orpheus.outcome }}" != success ]; then
+            echo '::warning::Groq Orpheus is not externally ready yet. Inspect the smoke step for the exact provider requirement.'
+          fi
+          if [ -z "${FISH_API_KEY:-}" ]; then
+            echo '::warning::Fish hosted S2-Pro is waiting for FISH_API_KEY; the private self-hosted Fish fallback can instead use HF_TOKEN.'
+          fi
+          if [ -z "${HF_TOKEN:-}" ]; then
+            echo '::warning::Private Fish S2-Pro and Dia2 GPU deployments are waiting for HF_TOKEN.'
+          fi
+          echo 'Provider readiness probe completed; external account prerequisites are reported as warnings, not code failures.'

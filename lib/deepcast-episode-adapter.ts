@@ -43,6 +43,7 @@ export function toEpisodeRequest(input: Record<string, unknown>) {
       banter: input.jiroBanter,
       ttsEngine: input.jiroTtsEngine || "chatterbox-nano",
       voiceReferenceKey: input.jiroVoiceReferenceKey,
+      voiceReferenceText: input.jiroVoiceReferenceText,
     },
     host2: {
       name: input.sharpayName || "SHARPAY",
@@ -54,6 +55,7 @@ export function toEpisodeRequest(input: Record<string, unknown>) {
       energy: input.sharpayEnergy,
       ttsEngine: input.sharpayTtsEngine || "chatterbox-nano",
       voiceReferenceKey: input.sharpayVoiceReferenceKey,
+      voiceReferenceText: input.sharpayVoiceReferenceText,
     },
     downloadFormat: "MP3",
     audioOutput: "Spatial Stereo",

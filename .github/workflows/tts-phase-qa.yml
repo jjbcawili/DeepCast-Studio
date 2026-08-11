@@ -1,0 +1,94 @@
+name: DeepCast TTS Phase QA
+
+on:
+  pull_request:
+    paths:
+      - 'app/studio/SpeakerSettings.tsx'
+      - 'app/studio/page.tsx'
+      - 'lib/deepcast-episode-adapter.ts'
+      - 'tts-worker/**'
+      - 'gpu-services/dia2/**'
+      - 'gpu-services/fish-s2/**'
+      - '.github/workflows/deepcast-audio.yml'
+      - '.github/workflows/deploy-dia2-space.yml'
+      - '.github/workflows/deploy-fish-s2-space.yml'
+      - '.github/workflows/tts-provider-smoke.yml'
+      - '.github/workflows/tts-phase-qa.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/studio/SpeakerSettings.tsx'
+      - 'app/studio/page.tsx'
+      - 'lib/deepcast-episode-adapter.ts'
+      - 'tts-worker/**'
+      - 'gpu-services/dia2/**'
+      - 'gpu-services/fish-s2/**'
+      - '.github/workflows/deepcast-audio.yml'
+      - '.github/workflows/deploy-dia2-space.yml'
+      - '.github/workflows/deploy-fish-s2-space.yml'
+      - '.github/workflows/tts-provider-smoke.yml'
+      - '.github/workflows/tts-phase-qa.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tts-phase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Production-build authoritative Sites frontend
+        run: npm run build
+      - name: Lint TTS-specific authoritative frontend files
+        run: npx eslint app/studio/SpeakerSettings.tsx lib/deepcast-episode-adapter.ts
+      - name: Syntax-check TTS GPU services
+        run: python -m py_compile tts-worker/app.py tts-worker/job.py tts-worker/chatterbox_engine.py tts-worker/engine_adapters.py gpu-services/dia2/app.py gpu-services/fish-s2/app.py
+      - name: Validate engine wiring contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          app=Path('tts-worker/app.py').read_text()
+          adapters=Path('tts-worker/engine_adapters.py').read_text()
+          studio=Path('app/studio/SpeakerSettings.tsx').read_text()
+          page=Path('app/studio/page.tsx').read_text()
+          workflow=Path('.github/workflows/deepcast-audio.yml').read_text()
+          required=['chatterbox-nano','chatterbox-turbo','f5-tts','fish-s2','dia2','groq-orpheus']
+          for engine in required:
+              if engine not in app and engine not in adapters:
+                  raise SystemExit(f'Missing runtime engine wiring: {engine}')
+              if engine not in studio:
+                  raise SystemExit(f'Missing authoritative Studio engine option: {engine}')
+          if 'REFERENCE_TTS_ENGINES.has(settings.ttsEngine)' not in page:
+              raise SystemExit('Live Studio reference-engine generation gate is missing.')
+          if 'orpheusVoice' not in page or 'voiceReferenceText' not in page:
+              raise SystemExit('Live Studio provider metadata payload is incomplete.')
+          if 'FISH_API_KEY' not in workflow or 'DEEPCAST_FISH_S2_URL' not in workflow or 'DEEPCAST_DIA2_URL' not in workflow:
+              raise SystemExit('Audio runner provider credentials/endpoints are not wired.')
+          if 'synthesize_dia2_dialogue' not in app:
+              raise SystemExit('Native Dia2 two-speaker path is missing.')
+          if 'synthesize_fish_s2' not in app:
+              raise SystemExit('Fish S2-Pro runtime path is missing.')
+          print('DeepCast multi-engine contracts validated.')
+          PY
+      - name: Validate GPU deployment definitions
+        run: |
+          test -s gpu-services/dia2/Dockerfile
+          grep -q 'nvidia/cuda:12.8' gpu-services/dia2/Dockerfile
+          grep -q 'nari-labs/dia2' gpu-services/dia2/Dockerfile
+          grep -q 'l4x1' .github/workflows/deploy-dia2-space.yml
+          test -s gpu-services/fish-s2/Dockerfile
+          grep -q 'nvidia/cuda:12.9' gpu-services/fish-s2/Dockerfile
+          grep -q 'v2.0.0-beta' gpu-services/fish-s2/Dockerfile
+          grep -q 'fishaudio/s2-pro' gpu-services/fish-s2/start.sh
+          grep -q 'l4x1' .github/workflows/deploy-fish-s2-space.yml
