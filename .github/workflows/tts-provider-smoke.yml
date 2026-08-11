@@ -40,22 +40,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "${GROQ_API_KEY:-}" ]; then
-            echo 'GROQ_API_KEY missing'
-            exit 2
-          fi
+          if [ -z "${GROQ_API_KEY:-}" ]; then echo 'GROQ_API_KEY missing'; exit 2; fi
           code="$(curl -sS -o /tmp/orpheus-output -w '%{http_code}' \
-            'https://api.groq.com/openai/v1/audio/speech' \
-            -X POST \
+            'https://api.groq.com/openai/v1/audio/speech' -X POST \
             -H "Authorization: Bearer ${GROQ_API_KEY}" \
-            -H 'Content-Type: application/json' \
-            -H 'Accept: audio/wav' \
-            -H 'User-Agent: DeepCast-Studio/1.0' \
+            -H 'Content-Type: application/json' -H 'Accept: audio/wav' -H 'User-Agent: DeepCast-Studio/1.0' \
             -d '{"model":"canopylabs/orpheus-v1-english","input":"[warm] DeepCast provider activation test.","voice":"daniel","response_format":"wav"}')"
-          if [ "$code" != 200 ]; then
-            echo "Orpheus HTTP $code: $(head -c 1200 /tmp/orpheus-output)"
-            exit 1
-          fi
+          if [ "$code" != 200 ]; then echo "Orpheus HTTP $code: $(head -c 1200 /tmp/orpheus-output)"; exit 1; fi
           python - <<'PY'
           import wave
           with wave.open('/tmp/orpheus-output','rb') as w:
@@ -68,10 +59,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "${FISH_API_KEY:-}" ]; then
-            echo 'Fish Audio key is not configured in GitHub Actions.'
-            exit 0
-          fi
+          if [ -z "${FISH_API_KEY:-}" ]; then echo 'Fish Audio key is not configured in GitHub Actions.'; exit 0; fi
           python -m pip install --disable-pip-version-check 'fish-audio-sdk>=1.0.0'
           python - <<'PY'
           from fishaudio import FishAudio
@@ -94,14 +82,14 @@ jobs:
         shell: bash
         run: |
           echo "Orpheus smoke outcome: ${{ steps.orpheus.outcome }}"
-          echo "Fish credential probe outcome: ${{ steps.fish.outcome }}"
+          echo "Fish hosted credential probe outcome: ${{ steps.fish.outcome }}"
           if [ "${{ steps.orpheus.outcome }}" != success ]; then
             echo '::warning::Groq Orpheus is not externally ready yet. Inspect the smoke step for the exact provider requirement.'
           fi
           if [ -z "${FISH_API_KEY:-}" ]; then
-            echo '::warning::Fish S2 hosted activation is waiting for FISH_API_KEY.'
+            echo '::warning::Fish hosted S2-Pro is waiting for FISH_API_KEY; the private self-hosted Fish fallback can instead use HF_TOKEN.'
           fi
           if [ -z "${HF_TOKEN:-}" ]; then
-            echo '::warning::Dia2 deployment is waiting for HF_TOKEN.'
+            echo '::warning::Private Fish S2-Pro and Dia2 GPU deployments are waiting for HF_TOKEN.'
           fi
           echo 'Provider readiness probe completed; external account prerequisites are reported as warnings, not code failures.'
