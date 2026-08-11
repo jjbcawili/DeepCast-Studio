@@ -22,4 +22,9 @@ jobs:
       - name: Syntax-check Cloudflare background worker
         run: npx esbuild cloudflare/src/index.ts --bundle --platform=browser --format=esm --external:jose --outfile=/tmp/deepcast-background-worker.js
       - name: Syntax-check DeepCast TTS workers
-        run: python -m py_compile tts-worker/app.py tts-worker/job.py tts-worker/chatterbox_engine.py tts-worker/engine_adapters.py
+        run: python -m py_compile tts-worker/app.py tts-worker/job.py tts-worker/chatterbox_engine.py tts-worker/engine_adapters.py gpu-services/dia2/app.py
+      - name: Validate Dia2 Docker build definition
+        run: |
+          test -s gpu-services/dia2/Dockerfile
+          grep -q 'nvidia/cuda:12.8' gpu-services/dia2/Dockerfile
+          grep -q 'nari-labs/dia2' gpu-services/dia2/Dockerfile
