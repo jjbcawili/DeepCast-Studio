@@ -75,11 +75,15 @@ def synthesize_orpheus(text: str, voice: str, style: str = "", pace: str = ""):
     rate = 24000
     for chunk in _split_for_orpheus(text):
         spoken = f"[{direction}] {chunk}" if direction else chunk
-        # Groq currently caps Orpheus English input at 200 characters.
         spoken = spoken[:200]
         response = requests.post(
             "https://api.groq.com/openai/v1/audio/speech",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "audio/wav",
+                "User-Agent": "DeepCast-Studio/1.0",
+            },
             json={
                 "model": "canopylabs/orpheus-v1-english",
                 "input": spoken,
@@ -105,8 +109,6 @@ def synthesize_f5(text: str, reference_path: Path, reference_text: str = "", pac
     except ImportError as exc:
         raise RuntimeError("F5-TTS is selected but its optional runtime was not installed.") from exc
     if _F5 is None:
-        # GitHub's DeepCast runner is CPU-only. This remains an experimental alternate
-        # lane; a GPU service is preferable for long episodes.
         _F5 = F5TTS(model="F5TTS_v1_Base", device="cpu")
     wav, rate, _ = _F5.infer(
         ref_file=str(reference_path),
@@ -142,7 +144,7 @@ def _fish_reference_text(client, reference_path: Path, config: dict) -> str:
 
 
 def synthesize_fish_s2(text: str, reference_path: Path, config: dict):
-    """Use Fish Audio's hosted S2-Pro API when configured; otherwise use the private bridge."""
+    """Use Fish Audio's hosted S2-Pro API when configured; otherwise use a private bridge."""
     global _FISH
     api_key = os.environ.get("FISH_API_KEY", "").strip()
     if not api_key:
@@ -174,6 +176,17 @@ def synthesize_fish_s2(text: str, reference_path: Path, config: dict):
     return _mono(audio), int(rate)
 
 
+def _dia_headers():
+    headers = {}
+    hf_token = os.environ.get("HF_TOKEN", "").strip()
+    deepcast_token = os.environ.get("DEEPCAST_DIA2_TOKEN", "").strip()
+    if hf_token:
+        headers["Authorization"] = f"Bearer {hf_token}"
+    if deepcast_token:
+        headers["X-DeepCast-Token"] = deepcast_token
+    return headers
+
+
 def synthesize_gpu_bridge(engine: str, text: str, reference_path: Path, config: dict):
     if engine == "fish-s2":
         url_key, token_key = "DEEPCAST_FISH_S2_URL", "DEEPCAST_FISH_S2_TOKEN"
@@ -189,10 +202,13 @@ def synthesize_gpu_bridge(engine: str, text: str, reference_path: Path, config: 
             f"Set {url_key} before selecting this engine."
         )
 
-    headers = {}
-    token = os.environ.get(token_key, "").strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    if engine == "dia2":
+        headers = _dia_headers()
+    else:
+        headers = {}
+        token = os.environ.get(token_key, "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
 
     with Path(reference_path).open("rb") as handle:
         response = requests.post(
@@ -231,12 +247,10 @@ def synthesize_dia2_dialogue(script: str, reference1: Path, reference2: Path, co
     endpoint = os.environ.get("DEEPCAST_DIA2_URL", "").strip()
     if not endpoint:
         raise RuntimeError("Dia2 is selected but DEEPCAST_DIA2_URL is not configured.")
-    token = os.environ.get("DEEPCAST_DIA2_TOKEN", "").strip()
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
     with Path(reference1).open("rb") as ref1, Path(reference2).open("rb") as ref2:
         response = requests.post(
             endpoint,
-            headers=headers,
+            headers=_dia_headers(),
             data={
                 "script": str(script or ""),
                 "speaker1": str(config1.get("name") or "Jiro"),
