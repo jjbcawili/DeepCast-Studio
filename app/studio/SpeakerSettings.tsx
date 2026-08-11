@@ -4,6 +4,8 @@ import { useState } from "react";
 import type { TtsVoiceName } from "../../lib/tts-voices";
 
 export type HostId = "jiro" | "sharpay";
+export type DeepCastTtsEngine = "chatterbox-nano" | "chatterbox-turbo" | "f5-tts" | "fish-s2" | "dia2" | "groq-orpheus" | "gemini";
+export type OrpheusVoiceName = "autumn" | "diana" | "hannah" | "austin" | "daniel" | "troy";
 
 export type HostVoiceSettings = {
   voice: TtsVoiceName;
@@ -11,9 +13,11 @@ export type HostVoiceSettings = {
   style: string;
   pace: string;
   accent: string;
-  ttsEngine: "chatterbox-nano" | "chatterbox-turbo" | "gemini";
+  ttsEngine: DeepCastTtsEngine;
+  orpheusVoice?: OrpheusVoiceName;
   voiceReferenceKey?: string;
   voiceReferenceName?: string;
+  voiceReferenceText?: string;
 };
 
 type SpeakerSettingsProps = {
@@ -38,6 +42,27 @@ type SpeakerSettingsProps = {
 const STYLE_OPTIONS = ["Natural", "Vocal Smile", "Dry Wit", "Dramatic", "Warm", "Authoritative"];
 const PACE_OPTIONS = ["Measured", "Conversational", "Up-tempo", "Rapid Fire"];
 const ACCENT_OPTIONS = ["American (General)", "Filipino English", "British", "Australian", "Neutral International"];
+const REFERENCE_ENGINES = new Set<DeepCastTtsEngine>(["chatterbox-nano", "chatterbox-turbo", "f5-tts", "fish-s2", "dia2"]);
+const ORPHEUS_VOICES: Array<{ value: OrpheusVoiceName; label: string; description: string }> = [
+  { value: "daniel", label: "Daniel", description: "Expressive male" },
+  { value: "austin", label: "Austin", description: "Expressive male" },
+  { value: "troy", label: "Troy", description: "Expressive male" },
+  { value: "hannah", label: "Hannah", description: "Expressive female" },
+  { value: "diana", label: "Diana", description: "Expressive female" },
+  { value: "autumn", label: "Autumn", description: "Expressive female" },
+];
+
+function engineBadge(engine: DeepCastTtsEngine) {
+  switch (engine) {
+    case "chatterbox-turbo": return "CHATTERBOX TURBO";
+    case "f5-tts": return "F5-TTS";
+    case "fish-s2": return "FISH S2";
+    case "dia2": return "DIA2";
+    case "groq-orpheus": return "GROQ ORPHEUS";
+    case "gemini": return "GEMINI";
+    default: return "CHATTERBOX NANO";
+  }
+}
 
 export default function SpeakerSettings({
   activeHost,
@@ -45,26 +70,29 @@ export default function SpeakerSettings({
   hostSettings,
   jiroBanter,
   sharpayEnergy,
-  voiceSearch,
-  previewingVoice,
-  previewAudioUrl,
-  previewLabel,
   onActiveHostChange,
   onHostNameChange,
   onHostSettingsChange,
   onJiroBanterChange,
   onSharpayEnergyChange,
-  onVoiceSearchChange,
-  onPreviewVoice,
 }: SpeakerSettingsProps) {
   const [uploadingReference, setUploadingReference] = useState(false);
   const [referenceError, setReferenceError] = useState("");
   const settings = hostSettings[activeHost];
   const hostLabel = hostNames[activeHost] || (activeHost === "jiro" ? "Jiro" : "Sharpay");
-  const engineBadge = (engine: HostVoiceSettings["ttsEngine"]) => engine === "chatterbox-turbo" ? "CHATTERBOX TURBO" : "CHATTERBOX NANO";
+  const referenceEngine = REFERENCE_ENGINES.has(settings.ttsEngine);
+  const orpheusEngine = settings.ttsEngine === "groq-orpheus";
 
   function update(patch: Partial<HostVoiceSettings>) {
     onHostSettingsChange(activeHost, { ...settings, ...patch });
+  }
+
+  function changeEngine(engine: DeepCastTtsEngine) {
+    if (engine === "groq-orpheus" && !settings.orpheusVoice) {
+      update({ ttsEngine: engine, orpheusVoice: activeHost === "jiro" ? "daniel" : "hannah" });
+      return;
+    }
+    update({ ttsEngine: engine });
   }
 
   async function uploadVoiceReference(file?: File) {
@@ -153,18 +181,43 @@ export default function SpeakerSettings({
         </div>
 
         <div className="tts-engine-panel">
-          <div className="voice-library-heading"><div><strong>VOICE CLONING ENGINE</strong><span>Reference-conditioned Chatterbox synthesis</span></div></div>
+          <div className="voice-library-heading"><div><strong>VOICE ENGINE</strong><span>Clone engines plus hosted expressive stock voices</span></div></div>
           <label className="approved-field-label" htmlFor={`${activeHost}-tts-engine`}>Engine</label>
-          <select id={`${activeHost}-tts-engine`} className="approved-studio-input" value={settings.ttsEngine} onChange={(event) => update({ ttsEngine: event.target.value as HostVoiceSettings["ttsEngine"] })}>
-            <option value="chatterbox-nano">Chatterbox Nano · CPU clone</option>
+          <select id={`${activeHost}-tts-engine`} className="approved-studio-input" value={settings.ttsEngine} onChange={(event) => changeEngine(event.target.value as DeepCastTtsEngine)}>
+            <option value="chatterbox-nano">Chatterbox Nano · default CPU clone</option>
             <option value="chatterbox-turbo">Chatterbox Turbo · quality clone</option>
+            <option value="f5-tts">F5-TTS · alternate reference clone</option>
+            <option value="fish-s2" disabled>Fish Audio S2-Pro · add Fish API credential first</option>
+            <option value="dia2" disabled>Dia2 · deploy private GPU service first</option>
+            <option value="groq-orpheus">Groq Orpheus · hosted expressive stock voice</option>
           </select>
-          <div className="voice-reference-box">
-            <strong>VOICE REFERENCE</strong>
-            <p>Upload a clean 5–20 second clip with one speaker, no music, and minimal room echo. The private reference is stored in DeepCast R2.</p>
-            <label className="voice-reference-upload">＋ {uploadingReference ? "UPLOADING REFERENCE…" : "UPLOAD VOICE REFERENCE"}<input type="file" accept="audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,.wav,.mp3,.m4a" disabled={uploadingReference} onChange={(event) => void uploadVoiceReference(event.target.files?.[0])} /></label>
-            <small className={referenceError ? "voice-reference-error" : ""}>{referenceError || (settings.voiceReferenceName ? `Saved: ${settings.voiceReferenceName}` : "Reference required before generation.")}</small>
-          </div>
+
+          {orpheusEngine ? (
+            <div className="voice-reference-box">
+              <strong>ORPHEUS STOCK VOICE</strong>
+              <p>Hosted expressive speech through Groq. The current Groq organization must accept the Orpheus model terms before first use.</p>
+              <select
+                className="approved-studio-input"
+                value={settings.orpheusVoice || (activeHost === "jiro" ? "daniel" : "hannah")}
+                onChange={(event) => update({ orpheusVoice: event.target.value as OrpheusVoiceName })}
+              >
+                {ORPHEUS_VOICES.map((voice) => <option key={voice.value} value={voice.value}>{voice.label} · {voice.description}</option>)}
+              </select>
+            </div>
+          ) : referenceEngine ? (
+            <div className="voice-reference-box">
+              <strong>VOICE REFERENCE</strong>
+              <p>Upload a clean 5–20 second clip with one speaker, no music, and minimal room echo. The private reference is stored in DeepCast R2.</p>
+              <label className="voice-reference-upload">＋ {uploadingReference ? "UPLOADING REFERENCE…" : "UPLOAD VOICE REFERENCE"}<input type="file" accept="audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,.wav,.mp3,.m4a" disabled={uploadingReference} onChange={(event) => void uploadVoiceReference(event.target.files?.[0])} /></label>
+              <small className={referenceError ? "voice-reference-error" : ""}>{referenceError || (settings.voiceReferenceName ? `Saved: ${settings.voiceReferenceName}` : "Reference required before generation.")}</small>
+              {(settings.ttsEngine === "f5-tts" || settings.ttsEngine === "fish-s2") && (
+                <label className="approved-field-label">
+                  Reference Transcript <span>(optional)</span>
+                  <textarea className="approved-studio-textarea" value={settings.voiceReferenceText || ""} onChange={(event) => update({ voiceReferenceText: event.target.value })} placeholder="Optional transcript of the reference clip; Fish can use ASR when omitted." />
+                </label>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
     </section>
