@@ -21,10 +21,12 @@ def _mono(audio):
 
 def _pace_value(pace: str) -> float:
     p = str(pace or "").lower()
-    if p == "slow":
+    if p in {"slow", "measured"}:
         return 0.92
-    if p == "fast":
+    if p in {"fast", "up-tempo"}:
         return 1.08
+    if p == "rapid fire":
+        return 1.12
     return 1.0
 
 
@@ -34,7 +36,7 @@ def _orpheus_direction(style: str) -> str:
         return "expressive"
     if value == "warm":
         return "warm"
-    if value == "dry":
+    if value in {"dry", "dry wit"}:
         return "deadpan"
     if value == "dramatic":
         return "dramatic"
@@ -49,8 +51,7 @@ def _split_for_orpheus(text: str, max_chars: int = 170):
     chunks = []
     current = ""
     for sentence in sentences:
-        words = sentence.split()
-        for word in words:
+        for word in sentence.split():
             candidate = f"{current} {word}".strip()
             if len(candidate) <= max_chars:
                 current = candidate
@@ -75,7 +76,6 @@ def synthesize_orpheus(text: str, voice: str, style: str = "", pace: str = ""):
     rate = 24000
     for chunk in _split_for_orpheus(text):
         spoken = f"[{direction}] {chunk}" if direction else chunk
-        spoken = spoken[:200]
         response = requests.post(
             "https://api.groq.com/openai/v1/audio/speech",
             headers={
@@ -86,7 +86,7 @@ def synthesize_orpheus(text: str, voice: str, style: str = "", pace: str = ""):
             },
             json={
                 "model": "canopylabs/orpheus-v1-english",
-                "input": spoken,
+                "input": spoken[:200],
                 "voice": selected,
                 "response_format": "wav",
             },
@@ -144,7 +144,7 @@ def _fish_reference_text(client, reference_path: Path, config: dict) -> str:
 
 
 def synthesize_fish_s2(text: str, reference_path: Path, config: dict):
-    """Use Fish Audio's hosted S2-Pro API when configured; otherwise use a private bridge."""
+    """Prefer Fish Audio hosted S2-Pro; fall back to the private DeepCast GPU Space."""
     global _FISH
     api_key = os.environ.get("FISH_API_KEY", "").strip()
     if not api_key:
@@ -158,7 +158,6 @@ def synthesize_fish_s2(text: str, reference_path: Path, config: dict):
 
     if _FISH is None:
         _FISH = FishAudio(api_key=api_key, timeout=240.0)
-
     reference_text = _fish_reference_text(_FISH, reference_path, config)
     try:
         raw = _FISH.tts.convert(
@@ -176,10 +175,10 @@ def synthesize_fish_s2(text: str, reference_path: Path, config: dict):
     return _mono(audio), int(rate)
 
 
-def _dia_headers():
+def _private_space_headers(token_env: str):
     headers = {}
     hf_token = os.environ.get("HF_TOKEN", "").strip()
-    deepcast_token = os.environ.get("DEEPCAST_DIA2_TOKEN", "").strip()
+    deepcast_token = os.environ.get(token_env, "").strip()
     if hf_token:
         headers["Authorization"] = f"Bearer {hf_token}"
     if deepcast_token:
@@ -202,14 +201,7 @@ def synthesize_gpu_bridge(engine: str, text: str, reference_path: Path, config: 
             f"Set {url_key} before selecting this engine."
         )
 
-    if engine == "dia2":
-        headers = _dia_headers()
-    else:
-        headers = {}
-        token = os.environ.get(token_key, "").strip()
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
+    headers = _private_space_headers(token_key)
     with Path(reference_path).open("rb") as handle:
         response = requests.post(
             endpoint,
@@ -223,12 +215,11 @@ def synthesize_gpu_bridge(engine: str, text: str, reference_path: Path, config: 
                 "accent": str(config.get("accent") or ""),
             },
             files={"reference": ("reference.wav", handle, "audio/wav")},
-            timeout=600,
+            timeout=900,
         )
 
     if not response.ok:
         raise RuntimeError(f"{engine} GPU bridge failed ({response.status_code}): {response.text[:500]}")
-
     content_type = response.headers.get("content-type", "").lower()
     if "application/json" in content_type:
         payload = response.json()
@@ -250,7 +241,7 @@ def synthesize_dia2_dialogue(script: str, reference1: Path, reference2: Path, co
     with Path(reference1).open("rb") as ref1, Path(reference2).open("rb") as ref2:
         response = requests.post(
             endpoint,
-            headers=_dia_headers(),
+            headers=_private_space_headers("DEEPCAST_DIA2_TOKEN"),
             data={
                 "script": str(script or ""),
                 "speaker1": str(config1.get("name") or "Jiro"),
