@@ -94,6 +94,7 @@ const DRIVE_AUTH_WORKER = "https://deepcast-drive-auth.sharpaysfabulousmusicdata
 const DRIVE_TOKEN_KEY = "deepcast.drive.accessToken";
 const DRIVE_TOKEN_EXPIRY_KEY = "deepcast.drive.expiresAt";
 const ACTIVE_GENERATION_JOB_KEY = "deepcast.active-generation-job.v1";
+const REFERENCE_TTS_ENGINES = new Set<HostVoiceSettings["ttsEngine"]>(["chatterbox-nano", "chatterbox-turbo", "f5-tts", "fish-s2", "dia2"]);
 
 function removeDriveAuthParams() {
   const cleanUrl = new URL(window.location.href);
@@ -177,6 +178,7 @@ export default function StudioPage() {
       pace: "Conversational",
       accent: "American (General)",
       ttsEngine: "chatterbox-nano",
+      orpheusVoice: "daniel",
     },
     sharpay: {
       voice: "Achernar",
@@ -185,6 +187,7 @@ export default function StudioPage() {
       pace: "Up-tempo",
       accent: "American (General)",
       ttsEngine: "chatterbox-nano",
+      orpheusVoice: "hannah",
     },
   });
   const [voiceSearch, setVoiceSearch] = useState("");
@@ -888,8 +891,8 @@ export default function StudioPage() {
       return;
     }
     for (const [label, settings] of [[jiroName, hostSettings.jiro], [sharpayName, hostSettings.sharpay]] as const) {
-      if (settings.ttsEngine !== "gemini" && !settings.voiceReferenceKey) {
-        setNotice(`Upload a clean voice reference for ${label} before using Chatterbox.`);
+      if (REFERENCE_TTS_ENGINES.has(settings.ttsEngine) && !settings.voiceReferenceKey) {
+        setNotice(`Upload a clean voice reference for ${label} before using ${settings.ttsEngine}.`);
         return;
       }
     }
@@ -907,13 +910,15 @@ export default function StudioPage() {
           source: buildCompactSourceContext(selectedSources), producerInstructions,
           scriptGuidance, scriptGuidanceName, scriptGuidanceMode, allowVerifiedAdditions,
           jiroBanter, sharpayEnergy, jiroName, sharpayName,
-          jiroVoice: hostSettings.jiro.voice, sharpayVoice: hostSettings.sharpay.voice,
+          jiroVoice: hostSettings.jiro.ttsEngine === "groq-orpheus" ? (hostSettings.jiro.orpheusVoice || "daniel") : hostSettings.jiro.voice,
+          sharpayVoice: hostSettings.sharpay.ttsEngine === "groq-orpheus" ? (hostSettings.sharpay.orpheusVoice || "hannah") : hostSettings.sharpay.voice,
           jiroProfile: hostSettings.jiro.audioProfile, sharpayProfile: hostSettings.sharpay.audioProfile,
           jiroStyle: hostSettings.jiro.style, sharpayStyle: hostSettings.sharpay.style,
           jiroPace: hostSettings.jiro.pace, sharpayPace: hostSettings.sharpay.pace,
           jiroAccent: hostSettings.jiro.accent, sharpayAccent: hostSettings.sharpay.accent,
           jiroTtsEngine: hostSettings.jiro.ttsEngine, sharpayTtsEngine: hostSettings.sharpay.ttsEngine,
           jiroVoiceReferenceKey: hostSettings.jiro.voiceReferenceKey, sharpayVoiceReferenceKey: hostSettings.sharpay.voiceReferenceKey,
+          jiroVoiceReferenceText: hostSettings.jiro.voiceReferenceText, sharpayVoiceReferenceText: hostSettings.sharpay.voiceReferenceText,
         }),
       });
       if (!response.ok) throw new Error(await getFailureMessage(response));
