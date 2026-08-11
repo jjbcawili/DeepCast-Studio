@@ -43,19 +43,50 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: deepcast-chatterbox-nano-5de7a54-${{ runner.os }}
+          key: deepcast-multitts-chatterbox-f5-${{ runner.os }}
       - name: Install FFmpeg and eSpeak NG
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng
       - name: Install CPU-only PyTorch
         run: python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 torchaudio==2.6.0
-      - name: Install DeepCast TTS worker dependencies
+      - name: Install DeepCast base TTS dependencies
         run: python -m pip install --disable-pip-version-check -r tts-worker/requirements.txt
-      - name: Run Chatterbox / Kokoro / FFmpeg job
+      - name: Resolve requested TTS engines
+        id: engines
+        env:
+          DEEPCAST_CALLBACK_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
+          BACKEND_URL: ${{ inputs.backend_url }}
+          EPISODE_ID: ${{ inputs.episode_id }}
+          PART: ${{ inputs.part }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          backend=os.environ['BACKEND_URL'].rstrip('/')
+          req=urllib.request.Request(
+              f"{backend}/internal/audio-job/{os.environ['EPISODE_ID']}/{os.environ['PART']}",
+              headers={"Authorization":f"Bearer {os.environ['DEEPCAST_CALLBACK_SECRET']}"},
+          )
+          with urllib.request.urlopen(req, timeout=60) as response:
+              payload=json.load(response)
+          engines={str((payload.get(k) or {}).get('ttsEngine') or 'chatterbox-nano') for k in ('host1','host2')}
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as out:
+              out.write(f"needs_f5={'true' if 'f5-tts' in engines else 'false'}\n")
+              out.write('engines='+','.join(sorted(engines))+'\n')
+          print('Requested engines:', ', '.join(sorted(engines)))
+          PY
+      - name: Install F5-TTS alternate cloning engine
+        if: steps.engines.outputs.needs_f5 == 'true'
+        run: python -m pip install --disable-pip-version-check "f5-tts==1.1.22"
+      - name: Run DeepCast multi-engine TTS / FFmpeg job
         env:
           DEEPCAST_CALLBACK_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
           TTS_SHARED_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          DEEPCAST_FISH_S2_URL: ${{ secrets.DEEPCAST_FISH_S2_URL }}
+          DEEPCAST_FISH_S2_TOKEN: ${{ secrets.DEEPCAST_FISH_S2_TOKEN }}
+          DEEPCAST_DIA2_URL: ${{ secrets.DEEPCAST_DIA2_URL }}
+          DEEPCAST_DIA2_TOKEN: ${{ secrets.DEEPCAST_DIA2_TOKEN }}
         run: |
           cd tts-worker
           python job.py \
