@@ -1,0 +1,38 @@
+name: Port Multi-Engine TTS to Live Studio
+
+on:
+  push:
+    branches: [agent/activate-all-tts-phases]
+    paths:
+      - '.github/scripts/port_live_tts_ui.py'
+      - '.github/workflows/port-live-tts-ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  port:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/activate-all-tts-phases
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply deterministic live Studio port
+        run: python .github/scripts/port_live_tts_ui.py
+      - name: Commit active Studio page update
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- app/studio/page.tsx; then
+            echo 'Live Studio page already contains the multi-engine payload wiring.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/studio/page.tsx
+          git commit -m 'Port multi-engine TTS to live Studio payload'
+          git push origin HEAD:agent/activate-all-tts-phases
