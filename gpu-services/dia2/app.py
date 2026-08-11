@@ -19,7 +19,7 @@ app = FastAPI(title="DeepCast Dia2 GPU Bridge", version="1.0.0")
 
 
 def _authorize(value: str | None):
-    if AUTH_TOKEN and value != f"Bearer {AUTH_TOKEN}":
+    if AUTH_TOKEN and value != AUTH_TOKEN:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
@@ -112,7 +112,7 @@ def health():
 
 @app.post("/synthesize")
 def synthesize(
-    authorization: str | None = Header(default=None),
+    x_deepcast_token: str | None = Header(default=None),
     script: str = Form(default=""),
     text: str = Form(default=""),
     cfgScale: float = Form(default=6.0),
@@ -121,7 +121,7 @@ def synthesize(
     reference1: UploadFile | None = File(default=None),
     reference2: UploadFile | None = File(default=None),
 ):
-    _authorize(authorization)
+    _authorize(x_deepcast_token)
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         if script.strip():
