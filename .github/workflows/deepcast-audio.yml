@@ -88,9 +88,9 @@ jobs:
           TTS_SHARED_SECRET: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           FISH_API_KEY: ${{ secrets.FISH_API_KEY }}
-          DEEPCAST_FISH_S2_URL: ${{ secrets.DEEPCAST_FISH_S2_URL }}
-          DEEPCAST_FISH_S2_TOKEN: ${{ secrets.DEEPCAST_FISH_S2_TOKEN }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DEEPCAST_FISH_S2_URL: ${{ vars.DEEPCAST_FISH_S2_URL || secrets.DEEPCAST_FISH_S2_URL }}
+          DEEPCAST_FISH_S2_TOKEN: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
           DEEPCAST_DIA2_URL: ${{ vars.DEEPCAST_DIA2_URL || secrets.DEEPCAST_DIA2_URL }}
           DEEPCAST_DIA2_TOKEN: ${{ secrets.DEEPCAST_CALLBACK_SECRET }}
         run: |
