@@ -62,6 +62,15 @@ export type EpisodeRecord = {
   events?: EpisodeEvent[];
 };
 
+export type TTSEngine =
+  | 'chatterbox-nano'
+  | 'chatterbox-turbo'
+  | 'f5-tts'
+  | 'fish-s2'
+  | 'dia2'
+  | 'groq-orpheus'
+  | 'kokoro';
+
 export type HostConfig = {
   name: string;
   voice: string;
@@ -71,9 +80,10 @@ export type HostConfig = {
   accent: string;
   banter: number;
   directorsNote: string;
-  ttsEngine?: 'chatterbox-nano' | 'chatterbox-turbo' | 'kokoro';
+  ttsEngine?: TTSEngine;
   voiceReferenceKey?: string;
   voiceReferenceName?: string;
+  voiceReferenceText?: string;
 };
 
 export type EpisodeSubmitPayload = {
