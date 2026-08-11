@@ -9,6 +9,7 @@ import soundfile as sf
 
 ORPHEUS_VOICES = {"autumn", "diana", "hannah", "austin", "daniel", "troy"}
 _F5 = None
+_FISH = None
 
 
 def _mono(audio):
@@ -74,7 +75,7 @@ def synthesize_orpheus(text: str, voice: str, style: str = "", pace: str = ""):
     rate = 24000
     for chunk in _split_for_orpheus(text):
         spoken = f"[{direction}] {chunk}" if direction else chunk
-        # Groq currently caps Orpheus input at 200 characters.
+        # Groq currently caps Orpheus English input at 200 characters.
         spoken = spoken[:200]
         response = requests.post(
             "https://api.groq.com/openai/v1/audio/speech",
@@ -104,8 +105,8 @@ def synthesize_f5(text: str, reference_path: Path, reference_text: str = "", pac
     except ImportError as exc:
         raise RuntimeError("F5-TTS is selected but its optional runtime was not installed.") from exc
     if _F5 is None:
-        # GitHub's current DeepCast runner is CPU-only. This works as an experimental
-        # alternate lane, but a GPU endpoint is preferable for long episodes.
+        # GitHub's DeepCast runner is CPU-only. This remains an experimental alternate
+        # lane; a GPU service is preferable for long episodes.
         _F5 = F5TTS(model="F5TTS_v1_Base", device="cpu")
     wav, rate, _ = _F5.infer(
         ref_file=str(reference_path),
@@ -119,6 +120,60 @@ def synthesize_f5(text: str, reference_path: Path, reference_text: str = "", pac
     return _mono(wav), int(rate)
 
 
+def _fish_reference_text(client, reference_path: Path, config: dict) -> str:
+    explicit = str(config.get("voiceReferenceText") or "").strip()
+    if explicit:
+        return explicit
+    try:
+        result = client.asr.transcribe(
+            audio=Path(reference_path).read_bytes(),
+            language="en",
+            ignore_timestamps=True,
+        )
+        value = str(getattr(result, "text", "") or "").strip()
+        if value:
+            return value
+    except Exception as exc:
+        raise RuntimeError(
+            "Fish S2 needs the reference transcript. Automatic Fish ASR failed; "
+            "add voiceReferenceText to the host reference."
+        ) from exc
+    raise RuntimeError("Fish S2 could not resolve a transcript for the voice reference.")
+
+
+def synthesize_fish_s2(text: str, reference_path: Path, config: dict):
+    """Use Fish Audio's hosted S2-Pro API when configured; otherwise use the private bridge."""
+    global _FISH
+    api_key = os.environ.get("FISH_API_KEY", "").strip()
+    if not api_key:
+        return synthesize_gpu_bridge("fish-s2", text, reference_path, config)
+
+    try:
+        from fishaudio import FishAudio
+        from fishaudio.types import ReferenceAudio
+    except ImportError as exc:
+        raise RuntimeError("Fish S2 is selected but fish-audio-sdk was not installed.") from exc
+
+    if _FISH is None:
+        _FISH = FishAudio(api_key=api_key, timeout=240.0)
+
+    reference_text = _fish_reference_text(_FISH, reference_path, config)
+    try:
+        raw = _FISH.tts.convert(
+            text=str(text or ""),
+            references=[ReferenceAudio(audio=Path(reference_path).read_bytes(), text=reference_text)],
+            format="wav",
+            speed=_pace_value(config.get("pace") or "Medium"),
+            model="s2-pro",
+        )
+        if not isinstance(raw, (bytes, bytearray)):
+            raw = b"".join(raw)
+        audio, rate = sf.read(io.BytesIO(bytes(raw)), dtype="float32")
+    except Exception as exc:
+        raise RuntimeError(f"Fish Audio S2-Pro generation failed: {exc}") from exc
+    return _mono(audio), int(rate)
+
+
 def synthesize_gpu_bridge(engine: str, text: str, reference_path: Path, config: dict):
     if engine == "fish-s2":
         url_key, token_key = "DEEPCAST_FISH_S2_URL", "DEEPCAST_FISH_S2_TOKEN"
@@ -130,7 +185,7 @@ def synthesize_gpu_bridge(engine: str, text: str, reference_path: Path, config: 
     endpoint = os.environ.get(url_key, "").strip()
     if not endpoint:
         raise RuntimeError(
-            f"{engine} is wired in DeepCast but no GPU endpoint is configured. "
+            f"{engine} is wired in DeepCast but no provider credential or GPU endpoint is configured. "
             f"Set {url_key} before selecting this engine."
         )
 
@@ -169,4 +224,33 @@ def synthesize_gpu_bridge(engine: str, text: str, reference_path: Path, config: 
         audio, rate = sf.read(io.BytesIO(raw), dtype="float32")
     else:
         audio, rate = sf.read(io.BytesIO(response.content), dtype="float32")
+    return _mono(audio), int(rate)
+
+
+def synthesize_dia2_dialogue(script: str, reference1: Path, reference2: Path, config1: dict, config2: dict):
+    endpoint = os.environ.get("DEEPCAST_DIA2_URL", "").strip()
+    if not endpoint:
+        raise RuntimeError("Dia2 is selected but DEEPCAST_DIA2_URL is not configured.")
+    token = os.environ.get("DEEPCAST_DIA2_TOKEN", "").strip()
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    with Path(reference1).open("rb") as ref1, Path(reference2).open("rb") as ref2:
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            data={
+                "script": str(script or ""),
+                "speaker1": str(config1.get("name") or "Jiro"),
+                "speaker2": str(config2.get("name") or "Sharpay"),
+                "cfgScale": "6.0",
+                "temperature": "0.8",
+            },
+            files={
+                "reference1": ("speaker1.wav", ref1, "audio/wav"),
+                "reference2": ("speaker2.wav", ref2, "audio/wav"),
+            },
+            timeout=900,
+        )
+    if not response.ok:
+        raise RuntimeError(f"Dia2 dialogue endpoint failed ({response.status_code}): {response.text[:500]}")
+    audio, rate = sf.read(io.BytesIO(response.content), dtype="float32")
     return _mono(audio), int(rate)
