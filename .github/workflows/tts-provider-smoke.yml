@@ -44,29 +44,23 @@ jobs:
             echo 'GROQ_API_KEY missing'
             exit 2
           fi
+          code="$(curl -sS -o /tmp/orpheus-output -w '%{http_code}' \
+            'https://api.groq.com/openai/v1/audio/speech' \
+            -X POST \
+            -H "Authorization: Bearer ${GROQ_API_KEY}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: audio/wav' \
+            -H 'User-Agent: DeepCast-Studio/1.0' \
+            -d '{"model":"canopylabs/orpheus-v1-english","input":"[warm] DeepCast provider activation test.","voice":"daniel","response_format":"wav"}')"
+          if [ "$code" != 200 ]; then
+            echo "Orpheus HTTP $code: $(head -c 1200 /tmp/orpheus-output)"
+            exit 1
+          fi
           python - <<'PY'
-          import io, os, wave, urllib.request, urllib.error, json
-          payload=json.dumps({
-            'model':'canopylabs/orpheus-v1-english',
-            'input':'[warm] DeepCast provider activation test.',
-            'voice':'daniel',
-            'response_format':'wav'
-          }).encode()
-          req=urllib.request.Request(
-            'https://api.groq.com/openai/v1/audio/speech', data=payload,
-            headers={'Authorization':'Bearer '+os.environ['GROQ_API_KEY'],'Content-Type':'application/json'},
-            method='POST')
-          try:
-            with urllib.request.urlopen(req, timeout=120) as r:
-              raw=r.read()
-          except urllib.error.HTTPError as e:
-            body=e.read().decode('utf-8','replace')[:1200]
-            print(f'Orpheus HTTP {e.code}: {body}')
-            raise
-          if len(raw) < 1000: raise SystemExit('Orpheus returned unexpectedly small audio')
-          with wave.open(io.BytesIO(raw), 'rb') as w:
-            if w.getnframes() <= 0: raise SystemExit('Orpheus WAV has no frames')
-            print('Orpheus smoke OK:', w.getframerate(), 'Hz', w.getnframes(), 'frames')
+          import wave
+          with wave.open('/tmp/orpheus-output','rb') as w:
+              if w.getnframes() <= 0: raise SystemExit('Orpheus WAV has no frames')
+              print('Orpheus smoke OK:', w.getframerate(), 'Hz', w.getnframes(), 'frames')
           PY
       - name: Probe Fish Audio account when configured
         id: fish
