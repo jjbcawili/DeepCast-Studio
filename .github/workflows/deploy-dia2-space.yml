@@ -3,7 +3,7 @@ name: Deploy DeepCast Dia2 GPU Bridge
 on:
   workflow_dispatch:
   push:
-    branches: [agent/activate-all-tts-phases]
+    branches: [main, agent/activate-all-tts-phases]
     paths:
       - '.github/workflows/deploy-dia2-space.yml'
       - 'gpu-services/dia2/**'
@@ -44,9 +44,8 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
-          import json, os, re
+          import os, re
           from huggingface_hub import HfApi
-
           token=os.environ['HF_TOKEN']
           api=HfApi(token=token)
           who=api.whoami(token=token)
@@ -54,29 +53,9 @@ jobs:
           if not namespace:
               raise SystemExit('Could not determine Hugging Face namespace from HF_TOKEN.')
           repo_id=f"{namespace}/deepcast-dia2"
-          api.create_repo(
-              repo_id=repo_id,
-              repo_type='space',
-              space_sdk='docker',
-              private=True,
-              exist_ok=True,
-              token=token,
-          )
-          api.add_space_secret(
-              repo_id=repo_id,
-              key='DEEPCAST_DIA2_TOKEN',
-              value=os.environ['DEEPCAST_CALLBACK_SECRET'],
-              description='DeepCast authenticated TTS bridge token',
-              token=token,
-          )
-          api.upload_folder(
-              repo_id=repo_id,
-              repo_type='space',
-              folder_path='gpu-services/dia2',
-              commit_message='Deploy DeepCast Dia2 GPU bridge',
-              token=token,
-          )
-          # L4 provides 24 GB VRAM and is the lowest-cost current 24 GB Space tier.
+          api.create_repo(repo_id=repo_id, repo_type='space', space_sdk='docker', private=True, exist_ok=True, token=token)
+          api.add_space_secret(repo_id=repo_id, key='DEEPCAST_DIA2_TOKEN', value=os.environ['DEEPCAST_CALLBACK_SECRET'], description='DeepCast authenticated TTS bridge token', token=token)
+          api.upload_folder(repo_id=repo_id, repo_type='space', folder_path='gpu-services/dia2', commit_message='Deploy DeepCast Dia2 GPU bridge', token=token)
           runtime=api.request_space_hardware(repo_id=repo_id, hardware='l4x1', sleep_time=900, token=token)
           slug=re.sub(r'[^a-z0-9-]+','-',repo_id.lower().replace('/','-')).strip('-')
           endpoint=f"https://{slug}.hf.space/synthesize"
@@ -96,23 +75,12 @@ jobs:
         run: |
           set -euo pipefail
           api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/variables/DEEPCAST_DIA2_URL"
-          code="$(curl -sS -o /tmp/var.json -w '%{http_code}' \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2026-03-10' "$api")"
+          code="$(curl -sS -o /tmp/var.json -w '%{http_code}' -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "$api")"
+          data="$(python -c 'import json,os;print(json.dumps({"name":"DEEPCAST_DIA2_URL","value":os.environ["ENDPOINT"]}))')"
           if [ "$code" = 200 ]; then
-            curl --fail-with-body -sS -X PATCH \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H 'Accept: application/vnd.github+json' \
-              -H 'X-GitHub-Api-Version: 2026-03-10' \
-              "$api" -d "$(python -c 'import json,os;print(json.dumps({"name":"DEEPCAST_DIA2_URL","value":os.environ["ENDPOINT"]}))')"
+            curl --fail-with-body -sS -X PATCH -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "$api" -d "$data"
           else
-            curl --fail-with-body -sS -X POST \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H 'Accept: application/vnd.github+json' \
-              -H 'X-GitHub-Api-Version: 2026-03-10' \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/variables" \
-              -d "$(python -c 'import json,os;print(json.dumps({"name":"DEEPCAST_DIA2_URL","value":os.environ["ENDPOINT"]}))')"
+            curl --fail-with-body -sS -X POST -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/variables" -d "$data"
           fi
       - name: Wait for Dia2 Space runtime
         if: steps.auth.outputs.ready == 'true'
@@ -145,9 +113,8 @@ jobs:
           set -euo pipefail
           base="${ENDPOINT%/synthesize}"
           for attempt in $(seq 1 12); do
-            code="$(curl -sS -o /tmp/dia-health.json -w '%{http_code}' \
-              -H "Authorization: Bearer ${HF_TOKEN}" "${base}/health" || true)"
-            if [ "$code" = 200 ]; then cat /tmp/dia-health.json; exit 0; fi
+            code="$(curl -sS -o /tmp/dia-health.json -w '%{http_code}' -H "Authorization: Bearer ${HF_TOKEN}" "${base}/health" || true)"
+            if [ "$code" = 200 ] && grep -q '"ok":true' /tmp/dia-health.json; then cat /tmp/dia-health.json; exit 0; fi
             echo "Dia2 health attempt ${attempt}: HTTP ${code}"
             sleep 10
           done
