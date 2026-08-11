@@ -4,7 +4,21 @@ import { KOKORO_VOICES } from '../data/kokoroVoices';
 import { api } from '../lib/api';
 import { getProjects, makeId, upsertEpisode, patchEpisode } from '../lib/storage';
 import { useAuth } from '../auth/AuthContext';
-import type { EpisodeRecord, HostConfig } from '../types';
+import type { EpisodeRecord, HostConfig, TTSEngine } from '../types';
+
+const ORPHEUS_VOICES = [
+  ['autumn','Expressive female','English'],
+  ['diana','Expressive female','English'],
+  ['hannah','Expressive female','English'],
+  ['austin','Expressive male','English'],
+  ['daniel','Expressive male','English'],
+  ['troy','Expressive male','English'],
+] as const;
+
+const REFERENCE_ENGINES = new Set<TTSEngine>(['chatterbox-nano','chatterbox-turbo','f5-tts','fish-s2','dia2']);
+const GPU_ENGINES = new Set<TTSEngine>(['fish-s2','dia2']);
+const ORPHEUS_NAMES = new Set(ORPHEUS_VOICES.map(v=>v[0]));
+const KOKORO_NAMES = new Set(KOKORO_VOICES.map(v=>v[0]));
 
 const defaultJiro: HostConfig = { name:'Jiro', voice:'am_michael', profile:'A warm, witty, organized male host who keeps the timeline, release details, source evidence, and source boundaries clear.', style:'Conversational', pace:'Medium', accent:'Neutral', banter:80, directorsNote:'', ttsEngine:'chatterbox-nano' };
 const defaultSharpay: HostConfig = { name:'Sharpay', voice:'af_heart', profile:'A theatrical, expressive female host with playful main-character energy who adds texture, drama, humor, and sharp interpretation without sacrificing accuracy.', style:'Expressive', pace:'Medium', accent:'Neutral', banter:85, directorsNote:'', ttsEngine:'chatterbox-nano' };
@@ -16,22 +30,36 @@ function loadHostConfig(key:string, fallback:HostConfig):HostConfig {
 function HostEditor({ label, host, setHost }: { label:string; host:HostConfig; setHost:(h:HostConfig)=>void }) {
   const [q,setQ] = useState('');
   const [uploading,setUploading] = useState(false);
-  const voices = KOKORO_VOICES.filter(v => v.join(' ').toLowerCase().includes(q.toLowerCase()));
-  const cloneEngine = (host.ttsEngine || 'chatterbox-nano') !== 'kokoro';
+  const engine: TTSEngine = host.ttsEngine || 'chatterbox-nano';
+  const referenceEngine = REFERENCE_ENGINES.has(engine);
+  const orpheusEngine = engine === 'groq-orpheus';
+  const kokoroEngine = engine === 'kokoro';
+  const stockVoices = (orpheusEngine ? ORPHEUS_VOICES : KOKORO_VOICES).filter(v => v.join(' ').toLowerCase().includes(q.toLowerCase()));
+
   async function uploadReference(file?:File) {
     if(!file)return; setUploading(true);
-    try { const saved=await api.uploadVoiceReference(host.name,file); setHost({...host,voiceReferenceKey:saved.voiceReferenceKey,voiceReferenceName:saved.fileName,ttsEngine:host.ttsEngine || 'chatterbox-nano'}); }
+    try { const saved=await api.uploadVoiceReference(host.name,file); setHost({...host,voiceReferenceKey:saved.voiceReferenceKey,voiceReferenceName:saved.fileName,ttsEngine:engine}); }
     finally { setUploading(false); }
   }
   async function preview(voice: string) {
+    if(!kokoroEngine)return;
     try {
       const d = await api.previewVoice({ hostName:host.name, voice, style:host.style, pace:host.pace, accent:host.accent });
       if (d.url) new Audio(d.url).play();
       else if (d.audio) new Audio(`data:${d.mimeType || 'audio/wav'};base64,${d.audio}`).play();
     } catch { /* preview failure must never block episode creation */ }
   }
+  function changeEngine(value: string) {
+    const next = value as TTSEngine;
+    const patch: HostConfig = {...host, ttsEngine:next};
+    if(next==='groq-orpheus' && !ORPHEUS_NAMES.has(host.voice as any)) patch.voice = label==='HOST 1' ? 'daniel' : 'hannah';
+    if(next==='kokoro' && !KOKORO_NAMES.has(host.voice as any)) patch.voice = label==='HOST 1' ? 'am_michael' : 'af_heart';
+    setHost(patch);
+  }
+  const engineStatus = referenceEngine ? 'Voice cloning' : orpheusEngine ? 'Hosted expressive stock voice' : 'Emergency stock fallback';
+
   return <div className="host-card">
-    <div className="host-badge">{label} <b>{host.name}</b><span>{host.voice}</span></div>
+    <div className="host-badge">{label} <b>{host.name}</b><span>{referenceEngine?'Custom clone':host.voice}</span></div>
     <label>Host Name<input value={host.name} onChange={e=>setHost({...host,name:e.target.value})}/></label>
     <label>Audio Profile<textarea value={host.profile} onChange={e=>setHost({...host,profile:e.target.value})}/></label>
     <label>Banter Level <b>{host.banter}%</b><input type="range" min="0" max="100" value={host.banter} onChange={e=>setHost({...host,banter:Number(e.target.value)})}/></label>
@@ -41,11 +69,20 @@ function HostEditor({ label, host, setHost }: { label:string; host:HostConfig; s
       <label>Pace<select value={host.pace} onChange={e=>setHost({...host,pace:e.target.value})}><option>Slow</option><option>Medium</option><option>Fast</option></select></label>
       <label>Accent<select value={host.accent} onChange={e=>setHost({...host,accent:e.target.value})}><option>Neutral</option><option>American</option><option>British</option><option>Filipino English</option></select></label>
     </div>
-    <div className="voice-picker"><div className="voice-picker-head"><b>TTS Engine</b><span>{cloneEngine?'Voice cloning':'Legacy stock voice'}</span></div>
-      <label>Engine<select value={host.ttsEngine || 'chatterbox-nano'} onChange={e=>setHost({...host,ttsEngine:e.target.value as HostConfig['ttsEngine']})}><option value="chatterbox-nano">Chatterbox Nano · CPU clone</option><option value="chatterbox-turbo">Chatterbox Turbo · quality clone</option><option value="kokoro">Kokoro · legacy fallback</option></select></label>
-      {cloneEngine ? <div className="source-box"><b>VOICE REFERENCE</b><p className="helper">Use a clean 5–20 second clip with one speaker, no music, and minimal room echo. It is stored privately in DeepCast R2, not committed to GitHub.</p><input type="file" accept="audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,.wav,.mp3,.m4a" onChange={e=>uploadReference(e.target.files?.[0])} disabled={uploading}/><p className="helper">{uploading?'Uploading reference…':host.voiceReferenceName?`Saved: ${host.voiceReferenceName}`:'Reference required before generation.'}</p></div> : <>
+    <div className="voice-picker"><div className="voice-picker-head"><b>TTS Engine</b><span>{engineStatus}</span></div>
+      <label>Engine<select value={engine} onChange={e=>changeEngine(e.target.value)}>
+        <option value="chatterbox-nano">Chatterbox Nano · default CPU clone</option>
+        <option value="chatterbox-turbo">Chatterbox Turbo · quality clone</option>
+        <option value="f5-tts">F5-TTS · alternate clone (experimental CPU)</option>
+        <option value="fish-s2" disabled>Fish Audio S2 · GPU endpoint required</option>
+        <option value="dia2" disabled>Dia2 · CUDA dialogue endpoint required</option>
+        <option value="groq-orpheus">Groq Orpheus · hosted expressive voices</option>
+        <option value="kokoro">Kokoro · emergency legacy fallback</option>
+      </select></label>
+      {referenceEngine ? <div className="source-box"><b>VOICE REFERENCE</b><p className="helper">Use a clean 5–20 second clip with one speaker, no music, and minimal room echo. It is stored privately in DeepCast R2, not committed to GitHub.</p><input type="file" accept="audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,.wav,.mp3,.m4a" onChange={e=>uploadReference(e.target.files?.[0])} disabled={uploading}/><p className="helper">{uploading?'Uploading reference…':host.voiceReferenceName?`Saved: ${host.voiceReferenceName}`:'Reference required before generation.'}</p>{engine==='f5-tts'&&<label>Reference Transcript (optional)<textarea value={host.voiceReferenceText||''} onChange={e=>setHost({...host,voiceReferenceText:e.target.value})} placeholder="Optional transcript of the reference clip. Leave blank to let F5 auto-transcribe."/></label>}{GPU_ENGINES.has(engine)&&<p className="helper">This lane is wired but guarded until a private GPU endpoint is configured.</p>}</div> : <>
         <p>Selected: <b>{host.voice}</b></p><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search voices"/>
-        <div className="voice-list">{voices.map(([name,tone,accent])=><div className={`voice-row ${host.voice===name?'selected':''}`} key={name}><button type="button" className="voice-choice" onClick={()=>setHost({...host,voice:name})}><b>{name}</b><small>{tone} · {accent}</small></button><button type="button" className="tiny-button" onClick={()=>preview(name)}>▶ PREVIEW</button></div>)}</div>
+        <div className="voice-list">{stockVoices.map(([name,tone,accent])=><div className={`voice-row ${host.voice===name?'selected':''}`} key={name}><button type="button" className="voice-choice" onClick={()=>setHost({...host,voice:name})}><b>{name}</b><small>{tone} · {accent}</small></button>{kokoroEngine&&<button type="button" className="tiny-button" onClick={()=>preview(name)}>▶ PREVIEW</button>}</div>)}</div>
+        {orpheusEngine&&<p className="helper">Orpheus is hosted through Groq. Its voice style follows the selected voice plus your Style setting.</p>}
       </>}
     </div>
   </div>;
@@ -93,7 +130,10 @@ export function StudioPage(){
 
   async function generate(){
     if(!prompt.trim()&&!guidance.trim()){setFormError('Add a prompt/focus or script guidance first.'); return;}
-    for (const [label,host] of [['Jiro',jiro],['Sharpay',sharpay]] as const) { if((host.ttsEngine || 'chatterbox-nano') !== 'kokoro' && !host.voiceReferenceKey){setFormError(`Upload a clean voice reference for ${label} before using Chatterbox.`); return;} }
+    for (const [label,host] of [['Jiro',jiro],['Sharpay',sharpay]] as const) {
+      const engine: TTSEngine = host.ttsEngine || 'chatterbox-nano';
+      if(REFERENCE_ENGINES.has(engine) && !host.voiceReferenceKey){setFormError(`Upload a clean voice reference for ${label} before using ${engine}.`); return;}
+    }
     if(submitting)return;
     setSubmitting(true); setFormError('');
     const now=new Date().toISOString();
@@ -151,7 +191,7 @@ export function StudioPage(){
       <label className="toggle"><input type="checkbox" checked={webSearch} onChange={e=>setWebSearch(e.target.checked)}/><small>Enable web research for this episode when the background backend supports it</small></label>
     </section>
 
-    <section className="studio-section"><h2>SPEAKER SETTINGS</h2><p className="helper">Chatterbox Nano is the default no-per-character-cost cloning path. Turbo is the higher-quality clone option. Kokoro remains available only as a legacy fallback.</p><div className="host-grid"><HostEditor label="HOST 1" host={jiro} setHost={setJiro}/><HostEditor label="HOST 2" host={sharpay} setHost={setSharpay}/></div></section>
+    <section className="studio-section"><h2>SPEAKER SETTINGS</h2><p className="helper">Chatterbox Nano is the default clone. Turbo and F5-TTS are alternate cloning lanes. Groq Orpheus provides hosted expressive stock voices. Fish Audio S2 and Dia2 are wired for future private GPU endpoints. Kokoro remains the emergency legacy fallback.</p><div className="host-grid"><HostEditor label="HOST 1" host={jiro} setHost={setJiro}/><HostEditor label="HOST 2" host={sharpay} setHost={setSharpay}/></div></section>
 
     <section className="studio-section"><h2>PRODUCTION</h2><label>Producer Instructions<textarea value={producer} onChange={e=>setProducer(e.target.value)} placeholder="Tone, pacing, transitions, fact discipline, banter, segment priorities…"/></label>
       <div className="two-col-form"><label>Background Music<select value={musicMode} onChange={e=>setMusicMode(e.target.value)}><option value="none">None</option><option value="subtle" disabled>Subtle bed + ducking — deploy audio-bed lane first</option><option value="cinematic" disabled>Cinematic bed + ducking — deploy audio-bed lane first</option></select></label><label>Cover Art<select value={coverMode} onChange={e=>setCoverMode(e.target.value)}><option value="none">None</option><option value="auto" disabled>Auto — cover generator not deployed yet</option><option value="project" disabled>Use project art — R2 cover sync not deployed yet</option></select></label></div>
