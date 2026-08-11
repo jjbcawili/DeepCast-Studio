@@ -1,62 +1,77 @@
 # DeepCast Studio
 
-Canonical GitHub source mirror and recovery repository for **DeepCast Studio**, the AI-hosted entertainment podcast workspace currently served at `https://deepcast-studio.jjbcawili.chatgpt.site`.
+Authoritative source repository for the production DeepCast Studio web application at [deepcast-studio.jjbcawili.chatgpt.site](https://deepcast-studio.jjbcawili.chatgpt.site).
 
-## Current source sync
+## Source status
 
-This repository was restored on 2026-08-07 and then synchronized against the current live web app plus the strongest recoverable project evidence. The restored Git history and approved asset pack were preserved.
+The root application now contains the actual ChatGPT Sites frontend used by production. The earlier reconstructed Vite implementation is retained under `legacy-reconstructed-site/` for history and reference; it is not the active frontend.
 
-The current source sync includes:
+The repository contains three runtime layers:
 
-- Home dashboard with Projects, Recent Deep Dives, search/sort/filter controls, and workspace statistics.
-- Projects workspace with creation, search, sort, and grid/list views.
-- Deep Dives library with search and view modes.
-- Studio builder with prompt/focus, TXT/MD script guidance upload, project source selection, episode-only web research, four episode formats, 15/30/45/60 minute runtimes, configurable Jiro and Sharpay hosts, all 30 Gemini TTS voices, producer instructions, background-music controls, cover-art modes, output controls, and the Studio Master Console.
-- Chat workspace with optional Google Search grounding and returned source links.
-- Light/dark appearance support, fixed frosted header, responsive mobile navigation, and static background behavior.
-- Gemini 3.6 Flash for current text/script generation and Gemini 3.1 Flash TTS Preview for current speech generation, with segmented synthesis and retry handling for transient TTS failures.
-- The restored Git history preserves the earlier ElevenLabs implementation as historical provenance; the current runtime source uses Gemini TTS.
+- **Sites frontend (`app/`, `lib/`, `public/`)** — current responsive DeepCast interface, projects, Studio, episode pages, consoles, source tools, theme system, playback, downloads, and background-job adapter.
+- **Cloudflare backend (`cloudflare/`)** — durable episode jobs using Queues, D1, R2, Workers AI, optional Groq, progress callbacks, retries, and recovery.
+- **Hosted audio worker (`tts-worker/`)** — Chatterbox Turbo/Nano reference-conditioned synthesis and FFmpeg assembly.
 
-See [`docs/LIVE_SITE_SYNC_20260807.md`](docs/LIVE_SITE_SYNC_20260807.md) and [`docs/ASSET_PROVENANCE_20260808.md`](docs/ASSET_PROVENANCE_20260808.md).
-
-## Current model defaults
+## Current generation flow
 
 ```text
-Text / research: gemini-3.6-flash
-Speech:          gemini-3.1-flash-tts-preview
-Jiro voice:      Orus
-Sharpay voice:   Achernar
+DeepCast Site
+  -> Cloudflare episode API
+  -> Queue + D1 progress state
+  -> Workers AI / optional Groq script generation
+  -> hosted Chatterbox Turbo or Nano voice synthesis
+  -> FFmpeg mix/export
+  -> R2 playback and download
 ```
 
-The Gemini TTS catalog exposes 30 supported prebuilt voices. Web Search is optional and uses Gemini Google Search grounding when enabled.
+Generation runs as a background job, so it is not tied to an open Safari tab. The frontend polls compact progress snapshots and fetches the full episode payload after completion or failure.
 
-## Run locally
+## Voice system
+
+- Active TTS family: Chatterbox Turbo and Chatterbox Nano.
+- Jiro and Sharpay use user-provided, authorized voice-reference recordings when cloning is enabled.
+- Gemini voice names such as Orus and Achernar are historical and are not the current speaker defaults.
+- FFmpeg creates the finished episode and requested audio output.
+
+## Frontend development
+
+Requirements: Node.js `>=22.13.0` and npm.
 
 ```bash
 npm ci
-cp .env.example .env.local
-# Add GEMINI_API_KEY to .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`.
-
-## Build
+Production validation:
 
 ```bash
-npm run lint
 npm run build
-npm start
+npm run validate:artifact
 ```
 
-GitHub Actions runs `npm ci`, TypeScript linting, and the production build on `main` pushes and pull requests.
+Do not commit production secrets. The Sites deployment must configure `DEEPCAST_BACKEND_URL` and any frontend-to-backend authentication values through its environment settings.
 
-## Deployment boundaries
+## Cloudflare backend
 
-- The live ChatGPT Site is a separate deployment surface. A GitHub commit does **not** by itself publish the ChatGPT Site.
-- Production secrets, Google OAuth credentials, Cloudflare secrets, and private tokens must stay in deployment secret stores and must never be committed.
-- The restored repository contains the historical approved DeepCast SVG asset pack and active blue DeepCast/DeepDive title art.
-- The approved Projects and Workspace title-art originals were recovered from the ChatGPT Library package `DeepCast_UI_Assets_TRUE_TRANSPARENT_PNG_SVG_UPDATED.zip`. The package contains PNG and SVG originals with verified real transparency; deployment-name WebP copies are recovered into `public/assets/` for the current UI.
+See [`cloudflare/README.md`](cloudflare/README.md). Production requires:
+
+- D1 database and applied migrations
+- R2 audio bucket
+- Cloudflare Queue producer and consumer
+- Workers AI binding
+- hosted TTS worker URL
+- shared TTS secret
+- optional Groq credentials
+
+## Chatterbox/FFmpeg worker
+
+See [`tts-worker/README.md`](tts-worker/README.md). The worker must run on a compatible hosted compute service; it cannot execute heavyweight Chatterbox inference inside an ordinary browser request or standard Cloudflare Worker.
+
+## Branch and deployment boundaries
+
+- `main` is the combined authoritative repository: actual Sites frontend plus the Cloudflare and TTS backend sources.
+- `live-sites-v80` remains a historical synchronization branch and should not be treated as newer than `main` after this migration.
+- A GitHub commit does not automatically publish the ChatGPT Site. Sites deployment and Cloudflare deployment remain separate release actions.
 
 ## Project boundary
 

@@ -1,4 +1,7 @@
 node_modules/
+.vinext/
+.next/
+tsconfig.tsbuildinfo
 dist/
 .env
 .env.local
